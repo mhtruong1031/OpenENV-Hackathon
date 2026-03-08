@@ -9,13 +9,15 @@ import time
 from typing import Any, Dict, List, Optional
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 from models import ActionType, ExperimentAction, ExperimentObservation
 from server.hackathon_environment import BioExperimentEnvironment
 
-MODEL_ID = "Qwen/Qwen3.5-2B"
+MODEL_ID = "Qwen/Qwen3.5-0.8B"
 MAX_EPISODE_STEPS = 12
+PIPELINE_TASK = "image-text-to-text"
+USE_PIPELINE = True
 
 ACTION_TYPES = [a.value for a in ActionType]
 
@@ -108,29 +110,77 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
+def build_observation_prompt(obs: ExperimentObservation) -> str:
+    return format_observation(obs)
+
+
+def run_with_pipeline(pipe, prompt: str) -> str:
+    attempts = [
+        {"text": prompt},
+        {"text": prompt, "image": None},
+        {"image": prompt},
+    ]
+
+    for payload in attempts:
+        try:
+            result = pipe(payload, max_new_tokens=220)
+            if isinstance(result, list) and result:
+                result = result[0]
+            if isinstance(result, dict):
+                text = result.get("generated_text") or result.get("text") or result.get("answer")
+            elif isinstance(result, str):
+                text = result
+            else:
+                text = ""
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+        except Exception:
+            continue
+
+    return ""
+
+
 def main():
-    log(f"Loading tokenizer for {MODEL_ID} ...")
-    tokenizer = AutoTokenizer.from_pretrained(
-        MODEL_ID, trust_remote_code=True,
-    )
-    log("Tokenizer loaded. Loading model (this downloads ~4 GB on first run) ...")
-
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    log(f"Model loaded. Device: {model.device}")
-
+    tokenizer = None
+    model = None
     eos_ids: List[int] = []
-    if tokenizer.eos_token_id is not None:
-        eos_ids.append(tokenizer.eos_token_id)
-    extra = tokenizer.convert_tokens_to_ids(["<|im_end|>", "<|endoftext|>"])
-    for tid in extra:
-        if isinstance(tid, int) and tid not in eos_ids:
-            eos_ids.append(tid)
-    log(f"EOS token ids: {eos_ids}")
+    active_pipeline = None
+
+    if USE_PIPELINE:
+        log(f"Loading pipeline ({PIPELINE_TASK}) for {MODEL_ID} ...")
+        try:
+            active_pipeline = pipeline(
+                PIPELINE_TASK,
+                model=MODEL_ID,
+                trust_remote_code=True,
+                torch_dtype=torch.bfloat16,
+            )
+            log("Pipeline loaded.")
+        except Exception as exc:
+            log(f"Pipeline load failed ({exc}), falling back to tokenizer+model.")
+
+    if active_pipeline is None:
+        log(f"Loading tokenizer for {MODEL_ID} ...")
+        tokenizer = AutoTokenizer.from_pretrained(
+            MODEL_ID, trust_remote_code=True,
+        )
+        log("Tokenizer loaded. Loading model (this downloads ~4 GB on first run) ...")
+
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+        log(f"Model loaded. Device: {model.device}")
+
+        if tokenizer.eos_token_id is not None:
+            eos_ids.append(tokenizer.eos_token_id)
+        extra = tokenizer.convert_tokens_to_ids(["<|im_end|>", "<|endoftext|>"])
+        for tid in extra:
+            if isinstance(tid, int) and tid not in eos_ids:
+                eos_ids.append(tid)
+        log(f"EOS token ids: {eos_ids}")
 
     env = BioExperimentEnvironment()
     obs = env.reset()
@@ -144,46 +194,54 @@ def main():
     cumulative_reward = 0.0
 
     for step in range(MAX_EPISODE_STEPS):
-        user_msg = format_observation(obs)
+        user_msg = build_observation_prompt(obs)
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_msg},
         ]
 
-        try:
-            prompt = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=False,
-            )
-        except TypeError:
-            prompt = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        n_input = inputs["input_ids"].shape[1]
+        if tokenizer is None:
+            # Pipeline path usually ignores chat templates.
+            prompt = f"{SYSTEM_PROMPT}\n\n{user_msg}"
+        else:
+            try:
+                prompt = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            except TypeError:
+                prompt = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
 
         t0 = time.time()
-        with torch.no_grad():
-            output_ids = model.generate(
-                **inputs,
-                max_new_tokens=200,
-                do_sample=True,
-                temperature=0.7,
-                top_p=0.8,
-                top_k=20,
-                repetition_penalty=1.3,
-                eos_token_id=eos_ids if eos_ids else None,
-            )
+        if active_pipeline is not None:
+            response = run_with_pipeline(active_pipeline, prompt)
+            if not response:
+                response = format_observation(obs)
+        else:
+            assert tokenizer is not None and model is not None
+            inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+            n_input = inputs["input_ids"].shape[1]
+            with torch.no_grad():
+                output_ids = model.generate(
+                    **inputs,
+                    max_new_tokens=200,
+                    do_sample=True,
+                    temperature=0.7,
+                    top_p=0.8,
+                    top_k=20,
+                    repetition_penalty=1.3,
+                    eos_token_id=eos_ids if eos_ids else None,
+                )
+            new_tokens = output_ids[0][n_input:]
+            response = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
         gen_time = time.time() - t0
-
-        new_tokens = output_ids[0][n_input:]
-        response = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
         action = parse_action(response)
         used_fallback = False
