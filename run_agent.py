@@ -45,7 +45,7 @@ def _parse_thinking_flag() -> bool:
 
 ENABLE_THINKING = _parse_thinking_flag()
 
-MODEL_ID = "Qwen/Qwen3.5-0.8B"
+MODEL_ID = "Qwen/Qwen3.5-2B"
 MAX_EPISODE_STEPS = int(os.getenv("RUN_AGENT_MAX_EPISODE_STEPS", "35"))
 PIPELINE_TASK = "text-generation"
 
