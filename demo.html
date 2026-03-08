@@ -1,0 +1,1639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BioEnv</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+  :root {
+    --bg: #07090d;
+    --bg-surface: #0c0f16;
+    --bg-raised: #111827;
+    --bg-hover: #1a2235;
+    --border: #1e293b;
+    --border-active: #334155;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --text-muted: #475569;
+    --accent: #38bdf8;
+    --accent-dim: rgba(56,189,248,0.12);
+    --green: #34d399;
+    --green-dim: rgba(52,211,153,0.10);
+    --amber: #fbbf24;
+    --amber-dim: rgba(251,191,36,0.10);
+    --red: #f87171;
+    --red-dim: rgba(248,113,113,0.10);
+    --cyan: #22d3ee;
+    --cyan-dim: rgba(34,211,238,0.10);
+    --pink: #f472b6;
+    --purple: #a78bfa;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---- Top Bar ---- */
+  .topbar {
+    height: 48px;
+    min-height: 48px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    gap: 16px;
+    z-index: 10;
+  }
+  .topbar-logo {
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, #38bdf8, #22d3ee);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .topbar-sep { width: 1px; height: 20px; background: var(--border); }
+  .topbar-env {
+    font-size: 12px;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .topbar-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .status-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--text-muted);
+  }
+  .status-dot.live {
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+  .topbar-btn {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+  .btn-primary { background: var(--accent); color: #07090d; font-weight: 700; }
+  .btn-primary:hover { background: #7dd3fc; }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+  }
+  .btn-ghost:hover { background: var(--bg-hover); color: var(--text); }
+
+  /* ---- Main Layout ---- */
+  .main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 260px 1fr 340px;
+    overflow: hidden;
+  }
+
+  /* ---- Left Sidebar ---- */
+  .sidebar {
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .sidebar-section {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-heading {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+  }
+  .scenario-list { display: flex; flex-direction: column; gap: 4px; }
+  .scenario-opt {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    border: 1px solid transparent;
+  }
+  .scenario-opt:hover { background: var(--bg-hover); }
+  .scenario-opt.active {
+    background: var(--accent-dim);
+    border-color: rgba(56,189,248,0.2);
+  }
+  .scenario-opt .sc-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .scenario-opt .sc-name {
+    font-size: 12px; font-weight: 500; flex: 1;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .scenario-opt .sc-diff {
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .gauge { margin-bottom: 14px; }
+  .gauge:last-child { margin-bottom: 0; }
+  .gauge-header {
+    display: flex; justify-content: space-between;
+    align-items: baseline; margin-bottom: 6px;
+  }
+  .gauge-label { font-size: 12px; color: var(--text-dim); font-weight: 500; }
+  .gauge-value {
+    font-size: 12px; font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .gauge-track {
+    height: 4px; background: var(--bg-hover);
+    border-radius: 4px; overflow: hidden;
+  }
+  .gauge-fill {
+    height: 100%; border-radius: 4px;
+    transition: width 0.8s cubic-bezier(0.4,0,0.2,1);
+  }
+  .pipeline-steps { display: flex; flex-direction: column; gap: 2px; }
+  .pipe-step {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 8px; border-radius: 4px;
+    font-size: 11px; font-family: 'JetBrains Mono', monospace;
+    color: var(--text-muted);
+    opacity: 0; transform: translateX(-8px);
+    transition: all 0.3s ease;
+  }
+  .pipe-step.visible { opacity: 1; transform: translateX(0); }
+  .pipe-step.active { color: var(--text); background: var(--accent-dim); }
+  .pipe-step.done { color: var(--text-dim); }
+  .pipe-step .step-icon {
+    width: 16px; height: 16px; border-radius: 50%;
+    border: 1.5px solid var(--text-muted);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 8px; flex-shrink: 0; transition: all 0.3s;
+  }
+  .pipe-step.done .step-icon {
+    background: var(--green-dim); border-color: var(--green); color: var(--green);
+  }
+  .pipe-step.active .step-icon {
+    border-color: var(--accent); background: var(--accent-dim);
+    color: var(--accent); animation: pulse 1.5s infinite;
+  }
+
+  /* ---- Center: Lab + Terminal ---- */
+  .center {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  /* Lab canvas */
+  .lab-panel {
+    height: 300px;
+    min-height: 300px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+  .lab-panel canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .lab-label {
+    position: absolute;
+    top: 8px;
+    left: 12px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-muted);
+    z-index: 2;
+    pointer-events: none;
+  }
+  .lab-action-label {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-dim);
+    background: rgba(12,15,22,0.85);
+    padding: 4px 14px;
+    border-radius: 100px;
+    border: 1px solid var(--border);
+    z-index: 2;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .lab-action-label.visible { opacity: 1; }
+
+  .center-header {
+    height: 36px;
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    gap: 8px;
+  }
+  .tab {
+    font-size: 11px; font-weight: 500;
+    padding: 4px 12px; border-radius: 4px;
+    color: var(--text-dim); cursor: pointer;
+    transition: all 0.15s;
+  }
+  .tab.active { color: var(--text); background: var(--bg-hover); }
+  .tab:hover { color: var(--text); }
+
+  .terminal {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.9;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .terminal::-webkit-scrollbar { width: 6px; }
+  .terminal::-webkit-scrollbar-track { background: transparent; }
+  .terminal::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  .t-line {
+    white-space: pre-wrap;
+    opacity: 0;
+    animation: lineIn 0.25s ease forwards;
+  }
+  @keyframes lineIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .t-prompt { color: var(--green); }
+  .t-cmd { color: var(--text); }
+  .t-dim { color: var(--text-muted); }
+  .t-label { color: var(--accent); }
+  .t-str { color: var(--amber); }
+  .t-kw { color: var(--pink); }
+  .t-fn { color: var(--cyan); }
+  .t-num { color: var(--purple); }
+  .t-ok { color: var(--green); }
+  .t-warn { color: var(--amber); }
+  .t-err { color: var(--red); }
+  .t-sub { color: var(--text-dim); }
+
+  /* ---- Right Panel ---- */
+  .right {
+    background: var(--bg-surface);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .panel-section {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .panel-heading {
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 1.5px;
+    color: var(--text-muted); margin-bottom: 12px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .reward-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+  }
+  .reward-row:last-child { margin-bottom: 0; }
+  .rw-label {
+    font-size: 11px; font-weight: 500; width: 80px;
+    color: var(--text-dim); text-align: right;
+  }
+  .rw-track {
+    flex: 1; height: 18px;
+    background: rgba(255,255,255,0.03);
+    border-radius: 4px; overflow: hidden; position: relative;
+  }
+  .rw-fill {
+    height: 100%; border-radius: 4px; width: 0%;
+    transition: width 0.6s cubic-bezier(0.4,0,0.2,1);
+    display: flex; align-items: center; justify-content: flex-end;
+    padding-right: 6px; font-size: 10px; font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    color: rgba(255,255,255,0.85); min-width: fit-content;
+  }
+  .rw-fill.validity { background: linear-gradient(90deg, rgba(52,211,153,0.5), rgba(52,211,153,0.85)); }
+  .rw-fill.ordering { background: linear-gradient(90deg, rgba(34,211,238,0.5), rgba(34,211,238,0.85)); }
+  .rw-fill.info_gain { background: linear-gradient(90deg, rgba(56,189,248,0.5), rgba(56,189,248,0.85)); }
+  .rw-fill.efficiency { background: linear-gradient(90deg, rgba(251,191,36,0.5), rgba(251,191,36,0.85)); }
+  .rw-fill.novelty { background: linear-gradient(90deg, rgba(167,139,250,0.5), rgba(167,139,250,0.85)); }
+  .rw-fill.penalty { background: linear-gradient(90deg, rgba(248,113,113,0.5), rgba(248,113,113,0.85)); }
+  .cumulative-row {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);
+  }
+  .cum-label { font-size: 11px; color: var(--text-dim); }
+  .cum-value {
+    font-size: 20px; font-weight: 700;
+    font-family: 'JetBrains Mono', monospace; color: var(--green);
+  }
+  .discovery-list { display: flex; flex-direction: column; gap: 6px; }
+  .discovery {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 8px 10px; background: var(--bg-raised);
+    border-radius: 6px; border: 1px solid var(--border);
+    opacity: 0; transform: scale(0.95); transition: all 0.3s ease;
+  }
+  .discovery.visible { opacity: 1; transform: scale(1); }
+  .disc-icon {
+    width: 20px; height: 20px; border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; flex-shrink: 0; margin-top: 1px;
+  }
+  .disc-body { flex: 1; }
+  .disc-title { font-size: 11px; font-weight: 600; }
+  .disc-detail {
+    font-size: 10px; color: var(--text-dim); margin-top: 2px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .empty-state {
+    font-size: 11px; color: var(--text-muted);
+    font-style: italic; padding: 8px 0;
+  }
+  .step-reward-mini {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 10px; background: var(--bg-raised);
+    border-radius: 6px; margin-bottom: 4px;
+    font-size: 11px; font-family: 'JetBrains Mono', monospace;
+    opacity: 0; transition: all 0.3s;
+  }
+  .step-reward-mini.visible { opacity: 1; }
+  .step-reward-mini .srm-name { color: var(--text-dim); }
+  .step-reward-mini .srm-val { font-weight: 600; }
+  .step-reward-mini .srm-val.pos { color: var(--green); }
+  .step-reward-mini .srm-val.neg { color: var(--red); }
+</style>
+</head>
+<body>
+
+<!-- Top Bar -->
+<div class="topbar">
+  <div class="topbar-logo">BioEnv</div>
+  <div class="topbar-sep"></div>
+  <div class="topbar-env">biomarker_validation_lung</div>
+  <div class="topbar-status">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Ready</span>
+  </div>
+  <button class="topbar-btn btn-ghost" id="resetBtn" onclick="resetDemo()">Reset</button>
+  <button class="topbar-btn btn-primary" id="runBtn" onclick="startDemo()">Run Episode</button>
+</div>
+
+<div class="main">
+  <!-- Left Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-heading">Scenario</div>
+      <div class="scenario-list">
+        <div class="scenario-opt" onclick="selectScenario(this)">
+          <div class="sc-dot" style="background: var(--green);"></div>
+          <span class="sc-name">Cardiac Disease DE</span>
+          <span class="sc-diff" style="color: var(--green);">Easy</span>
+        </div>
+        <div class="scenario-opt" onclick="selectScenario(this)">
+          <div class="sc-dot" style="background: var(--amber);"></div>
+          <span class="sc-name">Hematopoiesis Trajectory</span>
+          <span class="sc-diff" style="color: var(--amber);">Med</span>
+        </div>
+        <div class="scenario-opt" onclick="selectScenario(this)">
+          <div class="sc-dot" style="background: var(--amber);"></div>
+          <span class="sc-name">Perturbation Immune</span>
+          <span class="sc-diff" style="color: var(--amber);">Med</span>
+        </div>
+        <div class="scenario-opt active" onclick="selectScenario(this)">
+          <div class="sc-dot" style="background: var(--red);"></div>
+          <span class="sc-name">Biomarker Validation (Lung)</span>
+          <span class="sc-diff" style="color: var(--red);">Hard</span>
+        </div>
+      </div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-heading">Environment State</div>
+      <div class="gauge">
+        <div class="gauge-header">
+          <span class="gauge-label">Budget</span>
+          <span class="gauge-value" id="budgetVal">$100,000</span>
+        </div>
+        <div class="gauge-track"><div class="gauge-fill" id="budgetFill" style="width:100%;background:var(--green);"></div></div>
+      </div>
+      <div class="gauge">
+        <div class="gauge-header">
+          <span class="gauge-label">Time</span>
+          <span class="gauge-value" id="timeVal">180 / 180 days</span>
+        </div>
+        <div class="gauge-track"><div class="gauge-fill" id="timeFill" style="width:100%;background:var(--cyan);"></div></div>
+      </div>
+      <div class="gauge">
+        <div class="gauge-header">
+          <span class="gauge-label">Steps</span>
+          <span class="gauge-value" id="stepVal">0 / 30</span>
+        </div>
+        <div class="gauge-track"><div class="gauge-fill" id="stepFill" style="width:0%;background:var(--accent);"></div></div>
+      </div>
+    </div>
+    <div class="sidebar-section" style="flex:1;overflow-y:auto;">
+      <div class="sidebar-heading">Pipeline</div>
+      <div class="pipeline-steps" id="pipelineSteps"></div>
+    </div>
+  </div>
+
+  <!-- Center: Lab + Terminal -->
+  <div class="center">
+    <div class="lab-panel">
+      <div class="lab-label">Virtual Lab</div>
+      <div class="lab-action-label" id="labActionLabel"></div>
+      <canvas id="labCanvas"></canvas>
+    </div>
+    <div class="center-header">
+      <div class="tab active">Agent Log</div>
+      <div class="tab">Raw JSON</div>
+    </div>
+    <div class="terminal" id="terminal"></div>
+  </div>
+
+  <!-- Right Panel -->
+  <div class="right">
+    <div class="panel-section">
+      <div class="panel-heading">
+        Step Reward
+        <span id="stepRewardLabel" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim);">--</span>
+      </div>
+      <div id="rewardBars">
+        <div class="reward-row"><span class="rw-label">Validity</span><div class="rw-track"><div class="rw-fill validity" id="rw-validity"></div></div></div>
+        <div class="reward-row"><span class="rw-label">Ordering</span><div class="rw-track"><div class="rw-fill ordering" id="rw-ordering"></div></div></div>
+        <div class="reward-row"><span class="rw-label">Info Gain</span><div class="rw-track"><div class="rw-fill info_gain" id="rw-info_gain"></div></div></div>
+        <div class="reward-row"><span class="rw-label">Efficiency</span><div class="rw-track"><div class="rw-fill efficiency" id="rw-efficiency"></div></div></div>
+        <div class="reward-row"><span class="rw-label">Novelty</span><div class="rw-track"><div class="rw-fill novelty" id="rw-novelty"></div></div></div>
+        <div class="reward-row"><span class="rw-label">Penalty</span><div class="rw-track"><div class="rw-fill penalty" id="rw-penalty"></div></div></div>
+      </div>
+      <div class="cumulative-row">
+        <span class="cum-label">Cumulative Reward</span>
+        <span class="cum-value" id="cumReward">0.00</span>
+      </div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-heading">Reward History</div>
+      <div id="rewardHistory"><div class="empty-state">No steps yet</div></div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-heading">Discoveries</div>
+      <div class="discovery-list" id="discoveries"><div class="empty-state">No discoveries yet</div></div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-heading">Violations</div>
+      <div id="violations"><div class="empty-state">No violations</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// =====================================================
+// VIRTUAL LAB - Canvas rendering
+// =====================================================
+const labCanvas = document.getElementById('labCanvas');
+const ctx = labCanvas.getContext('2d');
+let labW, labH, dpr;
+
+function resizeLab() {
+  const rect = labCanvas.parentElement.getBoundingClientRect();
+  dpr = window.devicePixelRatio || 1;
+  labW = rect.width;
+  labH = rect.height;
+  labCanvas.width = labW * dpr;
+  labCanvas.height = labH * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+resizeLab();
+window.addEventListener('resize', () => { resizeLab(); });
+
+// Lab stations (positions as fractions of canvas, converted in draw)
+const STATIONS = {
+  idle:       { fx: 0.06, fy: 0.55, label: 'ENTRANCE',       icon: 'door',    color: '#475569' },
+  sample:     { fx: 0.20, fy: 0.35, label: 'SAMPLE BENCH',   icon: 'bench',   color: '#34d399' },
+  cohort:     { fx: 0.20, fy: 0.75, label: 'COHORT SELECT',  icon: 'people',  color: '#34d399' },
+  prep:       { fx: 0.38, fy: 0.35, label: 'LIBRARY PREP',   icon: 'flask',   color: '#2dd4bf' },
+  sequencer:  { fx: 0.38, fy: 0.75, label: 'SEQUENCER',      icon: 'machine', color: '#22d3ee' },
+  computer:   { fx: 0.62, fy: 0.50, label: 'COMPUTE',        icon: 'screen',  color: '#38bdf8' },
+  whiteboard: { fx: 0.84, fy: 0.45, label: 'SYNTHESIS',      icon: 'board',   color: '#a78bfa' },
+};
+
+// Map actions to stations
+const ACTION_STATION = {
+  collect_sample: 'sample',
+  select_cohort: 'cohort',
+  prepare_library: 'prep',
+  sequence_cells: 'sequencer',
+  run_qc: 'computer',
+  normalize_data: 'computer',
+  cluster_cells: 'computer',
+  differential_expression: 'computer',
+  pathway_enrichment: 'computer',
+  marker_selection: 'computer',
+  validate_marker: 'computer',
+  synthesize_conclusion: 'whiteboard',
+};
+
+// Agent state
+let agent = { x: 0, y: 0, targetX: 0, targetY: 0, station: 'idle', working: false };
+let agentTrail = [];
+let workingTick = 0;
+let terminalLines = []; // fake terminal on computer screen
+let activeStationKey = null;
+let particlesLab = [];
+
+function stationPos(key) {
+  const s = STATIONS[key];
+  return { x: s.fx * labW, y: s.fy * labH };
+}
+
+function initAgent() {
+  const p = stationPos('idle');
+  agent.x = p.x; agent.y = p.y;
+  agent.targetX = p.x; agent.targetY = p.y;
+  agent.station = 'idle';
+  agent.working = false;
+  agent.facing = 1;
+  agentTrail = [];
+  terminalLines = [];
+  activeStationKey = null;
+  particlesLab = [];
+}
+initAgent();
+
+function moveAgentTo(stationKey) {
+  const p = stationPos(stationKey);
+  agent.targetX = p.x;
+  agent.targetY = p.y;
+  agent.station = stationKey;
+  agent.working = false;
+  activeStationKey = stationKey;
+}
+
+function setAgentWorking(actionName) {
+  agent.working = true;
+  workingTick = 0;
+  // If at computer, set up terminal lines
+  if (agent.station === 'computer') {
+    terminalLines = [];
+    typeComputerLines(actionName);
+  }
+}
+
+const COMP_COMMANDS = {
+  run_qc:                  ['$ scanpy.pp.filter_cells()', '  filtering 11847 cells...', '  10234 passed QC', '  doublet rate: 3.2%'],
+  normalize_data:          ['$ scran.normalize(adata)', '  computing size factors...', '  log1p transform', '  HVGs: 3000 selected'],
+  cluster_cells:           ['$ sc.tl.leiden(adata, 0.8)', '  building kNN graph...', '  optimizing modularity', '  14 clusters found'],
+  differential_expression: ['$ DESeq2.run(IPF, Ctrl)', '  fitting GLM...', '  1847 DE genes', '  SPP1 log2FC=3.42 ***'],
+  pathway_enrichment:      ['$ gseapy.enrich(de_genes)', '  KEGG + Reactome...', '  ECM-receptor p=4.2e-12', '  TGF-beta p=1.8e-09'],
+  marker_selection:        ['$ rank_markers(candidates)', '  SPP1  AUROC: 0.94', '  MMP7  AUROC: 0.87', '  COL1A1 AUROC: 0.81'],
+  validate_marker:         ['$ cross_validate("SPP1")', '  fold 1: 0.93', '  fold 2: 0.89', '  mean AUROC: 0.91 OK'],
+};
+
+async function typeComputerLines(actionName) {
+  const lines = COMP_COMMANDS[actionName] || ['$ processing...', '  computing...', '  done'];
+  for (let i = 0; i < lines.length; i++) {
+    await wait(250);
+    terminalLines.push(lines[i]);
+    if (terminalLines.length > 5) terminalLines.shift();
+  }
+}
+
+// Particles burst
+function spawnParticles(x, y, color, count = 8) {
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 / count) * i + Math.random() * 0.5;
+    particlesLab.push({
+      x, y,
+      vx: Math.cos(angle) * (1.5 + Math.random() * 2),
+      vy: Math.sin(angle) * (1.5 + Math.random() * 2),
+      life: 1,
+      color,
+      size: 2 + Math.random() * 2,
+    });
+  }
+}
+
+// ---- Draw loop ----
+let frameCount = 0;
+const FLOOR_COLOR = '#0f1520';
+const WALL_COLOR = '#1a2332';
+const FLOOR_TILE_A = '#0d1219';
+const FLOOR_TILE_B = '#10161f';
+
+function drawLab() {
+  frameCount++;
+  ctx.clearRect(0, 0, labW, labH);
+
+  // Floor - checkerboard tiles
+  const tileSize = 24;
+  for (let ty = 0; ty < labH; ty += tileSize) {
+    for (let tx = 0; tx < labW; tx += tileSize) {
+      const checker = ((Math.floor(tx / tileSize) + Math.floor(ty / tileSize)) % 2 === 0);
+      ctx.fillStyle = checker ? FLOOR_TILE_A : FLOOR_TILE_B;
+      ctx.fillRect(tx, ty, tileSize, tileSize);
+    }
+  }
+
+  // Walls - top and bottom border
+  ctx.fillStyle = WALL_COLOR;
+  ctx.fillRect(0, 0, labW, 18);
+  ctx.fillRect(0, labH - 8, labW, 8);
+  ctx.strokeStyle = '#253040';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, 18); ctx.lineTo(labW, 18); ctx.stroke();
+
+  // Draw equipment at each station (behind the person)
+  for (const [key, s] of Object.entries(STATIONS)) {
+    const pos = stationPos(key);
+    const isActive = key === activeStationKey;
+    drawEquipment(key, pos.x, pos.y, s.color, isActive);
+  }
+
+  // Draw walking path (subtle floor markings)
+  ctx.strokeStyle = 'rgba(56,189,248,0.06)';
+  ctx.lineWidth = 16;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  const pathOrder = ['idle','sample','prep','computer','whiteboard'];
+  ctx.beginPath();
+  const p0 = stationPos(pathOrder[0]);
+  ctx.moveTo(p0.x, p0.y + 10);
+  for (let i = 1; i < pathOrder.length; i++) {
+    const p = stationPos(pathOrder[i]);
+    ctx.lineTo(p.x, p.y + 10);
+  }
+  ctx.stroke();
+  // Lower path
+  ctx.beginPath();
+  const pl0 = stationPos('idle');
+  ctx.moveTo(pl0.x, pl0.y + 10);
+  const pl1 = stationPos('cohort');
+  ctx.lineTo(pl1.x, pl1.y + 10);
+  const pl2 = stationPos('sequencer');
+  ctx.lineTo(pl2.x, pl2.y + 10);
+  const pl3 = stationPos('computer');
+  ctx.lineTo(pl3.x, pl3.y + 10);
+  ctx.stroke();
+  ctx.lineCap = 'butt';
+
+  // Floating terminal popup at computer
+  if (agent.station === 'computer' && agent.working && terminalLines.length > 0) {
+    const cp = stationPos('computer');
+    const sx = cp.x + 55, sy = cp.y - 65;
+    const sw = 170, sh = 95;
+
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    roundRect(ctx, sx + 3, sy + 3, sw, sh, 6);
+    ctx.fill();
+
+    ctx.fillStyle = 'rgba(7,9,13,0.97)';
+    ctx.strokeStyle = 'rgba(56,189,248,0.3)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, sx, sy, sw, sh, 6);
+    ctx.fill(); ctx.stroke();
+
+    // Title bar
+    ctx.fillStyle = 'rgba(30,41,59,0.5)';
+    ctx.fillRect(sx + 1, sy + 1, sw - 2, 14);
+    ctx.fillStyle = '#475569';
+    ctx.font = '500 7px Inter, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('terminal', sx + 6, sy + 10);
+    // dots
+    ctx.fillStyle = '#f87171'; ctx.beginPath(); ctx.arc(sx + sw - 28, sy + 7, 3, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#fbbf24'; ctx.beginPath(); ctx.arc(sx + sw - 18, sy + 7, 3, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#34d399'; ctx.beginPath(); ctx.arc(sx + sw - 8, sy + 7, 3, 0, Math.PI*2); ctx.fill();
+
+    ctx.font = '500 9px JetBrains Mono, monospace';
+    const startY = sy + 28;
+    for (let i = 0; i < terminalLines.length; i++) {
+      const line = terminalLines[i];
+      ctx.fillStyle = line.startsWith('$') ? '#34d399' : line.includes('***') || line.includes('OK') ? '#34d399' : '#94a3b8';
+      ctx.fillText(terminalLines[i].substring(0, 24), sx + 8, startY + i * 14);
+    }
+    if (frameCount % 60 < 30) {
+      ctx.fillStyle = '#34d399';
+      ctx.fillRect(sx + 8, startY + terminalLines.length * 14 - 8, 6, 11);
+    }
+  }
+
+  // Whiteboard popup
+  if (agent.station === 'whiteboard' && agent.working) {
+    const wp = stationPos('whiteboard');
+    const bx = wp.x - 60, by = wp.y - 75;
+    const bw = 120, bh = 72;
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    roundRect(ctx, bx + 3, by + 3, bw, bh, 6);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(17,24,39,0.95)';
+    ctx.strokeStyle = 'rgba(167,139,250,0.3)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, bx, by, bw, bh, 6);
+    ctx.fill(); ctx.stroke();
+    ctx.font = '600 8px JetBrains Mono, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#a78bfa';
+    ctx.fillText('CONCLUSION', bx + 8, by + 14);
+    ctx.font = '400 7.5px JetBrains Mono, monospace';
+    const synthLines = ['SPP1 validated', 'AUROC = 0.91', 'Confidence: 0.85', 'Match: 4/5'];
+    for (let i = 0; i < synthLines.length; i++) {
+      ctx.fillStyle = i === 0 ? '#34d399' : '#94a3b8';
+      ctx.fillText(synthLines[i], bx + 8, by + 28 + i * 12);
+    }
+  }
+
+  // Activity text above active station
+  if (agent.working && activeStationKey && activeStationKey !== 'idle') {
+    const sp = stationPos(activeStationKey);
+    const actTexts = {
+      sample: 'collecting tissue...', cohort: 'selecting cohort...',
+      prep: 'preparing library...', sequencer: 'sequencing...',
+      computer: 'computing...', whiteboard: 'synthesizing...',
+    };
+    ctx.fillStyle = STATIONS[activeStationKey].color;
+    ctx.font = '500 9px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = 0.5 + 0.3 * Math.sin(frameCount * 0.06);
+    const yOff = ['sample','prep'].includes(activeStationKey) ? -55 : -50;
+    ctx.fillText(actTexts[activeStationKey] || 'working...', sp.x, sp.y + yOff);
+    ctx.globalAlpha = 1;
+  }
+
+  // Move agent smoothly
+  const dx = agent.targetX - agent.x;
+  const dy = agent.targetY - agent.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const isWalking = dist > 2;
+  if (isWalking) {
+    const speed = 0.05;
+    agent.x += dx * speed;
+    agent.y += dy * speed;
+    agent.facing = dx > 0 ? 1 : dx < -0.5 ? -1 : agent.facing;
+  }
+
+  // Draw person
+  drawPerson(agent.x, agent.y, isWalking, agent.working, agent.facing || 1);
+
+  // Particles
+  for (let i = particlesLab.length - 1; i >= 0; i--) {
+    const p = particlesLab[i];
+    p.x += p.vx; p.y += p.vy;
+    p.vx *= 0.95; p.vy *= 0.95;
+    p.life -= 0.02;
+    if (p.life <= 0) { particlesLab.splice(i, 1); continue; }
+    ctx.globalAlpha = p.life * 0.6;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Station labels
+  for (const [key, s] of Object.entries(STATIONS)) {
+    if (key === 'idle') continue;
+    const pos = stationPos(key);
+    const isActive = key === activeStationKey;
+    ctx.fillStyle = isActive ? s.color : '#334155';
+    ctx.font = `600 ${isActive ? 9 : 8}px Inter, sans-serif`;
+    ctx.textAlign = 'center';
+    const ly = key === 'cohort' || key === 'sequencer' ? pos.y + 45 : pos.y + 42;
+    ctx.fillText(s.label, pos.x, ly);
+  }
+
+  requestAnimationFrame(drawLab);
+}
+
+// ---- Draw person (lab coat researcher) ----
+function drawPerson(x, y, walking, working, facing) {
+  const f = facing;
+  const t = frameCount;
+  // Walking cycle
+  const walkCycle = walking ? Math.sin(t * 0.15) : 0;
+  const bobY = walking ? Math.abs(Math.sin(t * 0.15)) * 2 : 0;
+  // Working arm animation
+  const workArm = working ? Math.sin(t * 0.08) * 0.3 : 0;
+
+  const py = y - bobY; // feet position base
+
+  ctx.save();
+  ctx.translate(x, py);
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(0, 12, 10, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Legs
+  const legSpread = walking ? walkCycle * 5 : 0;
+  ctx.strokeStyle = '#1e3a5f';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  // Left leg
+  ctx.beginPath();
+  ctx.moveTo(-3, 4);
+  ctx.lineTo(-3 + legSpread, 12);
+  ctx.stroke();
+  // Right leg
+  ctx.beginPath();
+  ctx.moveTo(3, 4);
+  ctx.lineTo(3 - legSpread, 12);
+  ctx.stroke();
+  // Shoes
+  ctx.fillStyle = '#1e293b';
+  ctx.beginPath(); ctx.arc(-3 + legSpread, 12, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(3 - legSpread, 12, 2.5, 0, Math.PI * 2); ctx.fill();
+
+  // Body / lab coat
+  ctx.fillStyle = '#e2e8f0'; // white lab coat
+  ctx.beginPath();
+  ctx.moveTo(-7, -4);
+  ctx.lineTo(-6, 6);
+  ctx.lineTo(6, 6);
+  ctx.lineTo(7, -4);
+  ctx.quadraticCurveTo(7, -10, 0, -10);
+  ctx.quadraticCurveTo(-7, -10, -7, -4);
+  ctx.fill();
+  // Coat outline
+  ctx.strokeStyle = '#94a3b8';
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+  // Coat split at bottom
+  ctx.beginPath();
+  ctx.moveTo(0, 1);
+  ctx.lineTo(0, 6);
+  ctx.strokeStyle = '#cbd5e1';
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+  // Pocket
+  ctx.strokeStyle = '#94a3b8';
+  ctx.lineWidth = 0.5;
+  ctx.strokeRect(f > 0 ? 1 : -5, -1, 4, 3);
+
+  // Arms
+  ctx.strokeStyle = '#e2e8f0';
+  ctx.lineWidth = 3.5;
+  ctx.lineCap = 'round';
+  // Back arm
+  const backArmSwing = walking ? -walkCycle * 4 : 0;
+  ctx.beginPath();
+  ctx.moveTo(-f * 6, -6);
+  ctx.lineTo(-f * 6 + backArmSwing, 2);
+  ctx.stroke();
+  // Front arm (active arm)
+  if (working) {
+    // Arm reaching forward/up for work
+    ctx.beginPath();
+    ctx.moveTo(f * 6, -6);
+    ctx.lineTo(f * 10 + workArm * 5, -8 + workArm * 3);
+    ctx.stroke();
+    // Hand/tool
+    ctx.fillStyle = '#fde68a';
+    ctx.beginPath();
+    ctx.arc(f * 10 + workArm * 5, -8 + workArm * 3, 2, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    const frontArmSwing = walking ? walkCycle * 4 : 0;
+    ctx.beginPath();
+    ctx.moveTo(f * 6, -6);
+    ctx.lineTo(f * 6 + frontArmSwing, 2);
+    ctx.stroke();
+  }
+  // Skin for hands
+  ctx.fillStyle = '#fde68a';
+  ctx.beginPath(); ctx.arc(-f * 6 + backArmSwing, 2, 1.8, 0, Math.PI * 2); ctx.fill();
+  if (!working) {
+    const fs = walking ? walkCycle * 4 : 0;
+    ctx.beginPath(); ctx.arc(f * 6 + fs, 2, 1.8, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // Head
+  ctx.fillStyle = '#fde68a'; // skin
+  ctx.beginPath();
+  ctx.arc(0, -15, 7, 0, Math.PI * 2);
+  ctx.fill();
+  // Hair
+  ctx.fillStyle = '#1e293b';
+  ctx.beginPath();
+  ctx.arc(0, -17, 7, Math.PI, 0);
+  ctx.fill();
+  // Face details
+  ctx.fillStyle = '#1e293b';
+  // Eyes
+  ctx.beginPath();
+  ctx.arc(f * 2.5, -15.5, 1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(f * -1.5, -15.5, 1, 0, Math.PI * 2);
+  ctx.fill();
+  // Glasses
+  ctx.strokeStyle = '#475569';
+  ctx.lineWidth = 0.7;
+  ctx.beginPath();
+  ctx.arc(f * 2.5, -15.5, 2.5, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(f * -1.5, -15.5, 2.5, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(f * 0.5, -15.5);
+  ctx.lineTo(f * -0.5, -15.5);
+  ctx.stroke();
+  // Mouth
+  if (working) {
+    ctx.fillStyle = '#1e293b';
+    ctx.beginPath();
+    ctx.arc(f * 0.5, -12.5, 1, 0, Math.PI);
+    ctx.fill();
+  }
+
+  // ID Badge
+  ctx.fillStyle = '#38bdf8';
+  ctx.fillRect(f > 0 ? -6 : 2, -3, 4, 5);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 3px Inter, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('AI', f > 0 ? -4 : 4, 0.5);
+
+  ctx.restore();
+}
+
+// ---- Draw lab equipment ----
+function drawEquipment(stationKey, cx, cy, color, active) {
+  ctx.save();
+
+  switch (stationKey) {
+    case 'idle':
+      // Door frame
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(cx - 12, cy - 30, 24, 40);
+      ctx.fillStyle = '#1a2332';
+      ctx.fillRect(cx - 10, cy - 28, 20, 36);
+      ctx.fillStyle = '#475569';
+      ctx.beginPath(); ctx.arc(cx + 6, cy - 10, 2, 0, Math.PI * 2); ctx.fill();
+      break;
+
+    case 'sample':
+      // Lab bench with sample tubes
+      // Bench surface
+      ctx.fillStyle = '#1a2332';
+      ctx.fillRect(cx - 30, cy - 8, 60, 6);
+      // Bench legs
+      ctx.fillStyle = '#253040';
+      ctx.fillRect(cx - 28, cy - 2, 4, 20);
+      ctx.fillRect(cx + 24, cy - 2, 4, 20);
+      // Tube rack
+      ctx.fillStyle = '#253040';
+      ctx.fillRect(cx - 18, cy - 18, 36, 10);
+      // Test tubes
+      const tubeColors = ['#34d399', '#22d3ee', '#fbbf24', '#f472b6', '#34d399', '#22d3ee'];
+      for (let i = 0; i < 6; i++) {
+        const tx = cx - 14 + i * 6;
+        ctx.fillStyle = active ? tubeColors[i] : '#334155';
+        ctx.globalAlpha = active ? 0.7 : 0.4;
+        ctx.fillRect(tx, cy - 28, 4, 12);
+        // Tube caps
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = active ? tubeColors[i] : '#475569';
+        ctx.fillRect(tx - 0.5, cy - 29, 5, 2);
+      }
+      ctx.globalAlpha = 1;
+      // Pipette if active
+      if (active) {
+        const pipY = cy - 32 + Math.sin(frameCount * 0.08) * 4;
+        ctx.strokeStyle = '#94a3b8';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cx + 5, pipY);
+        ctx.lineTo(cx + 5, pipY - 14);
+        ctx.stroke();
+        ctx.fillStyle = '#64748b';
+        ctx.fillRect(cx + 3, pipY - 18, 5, 6);
+        // Droplet
+        if (frameCount % 60 < 20) {
+          ctx.fillStyle = '#34d399';
+          ctx.globalAlpha = 0.6;
+          ctx.beginPath();
+          ctx.arc(cx + 5, pipY + 3, 1.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+      }
+      break;
+
+    case 'cohort':
+      // Filing cabinet / patient records
+      ctx.fillStyle = '#1a2332';
+      ctx.fillRect(cx - 20, cy - 22, 40, 40);
+      ctx.strokeStyle = '#253040';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 3; i++) {
+        const dy = cy - 18 + i * 13;
+        ctx.strokeRect(cx - 18, dy, 36, 11);
+        ctx.fillStyle = active ? '#475569' : '#253040';
+        ctx.fillRect(cx - 4, dy + 4, 8, 3);
+      }
+      // Clipboard
+      ctx.fillStyle = '#253040';
+      ctx.fillRect(cx + 24, cy - 16, 14, 20);
+      ctx.strokeStyle = '#475569';
+      ctx.lineWidth = 0.5;
+      for (let i = 0; i < 4; i++) {
+        ctx.beginPath();
+        ctx.moveTo(cx + 27, cy - 12 + i * 4);
+        ctx.lineTo(cx + 35, cy - 12 + i * 4);
+        ctx.stroke();
+      }
+      if (active) {
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.5;
+        ctx.beginPath(); ctx.arc(cx + 31, cy - 14, 2, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      break;
+
+    case 'prep':
+      // Library prep station - PCR machine + bench
+      // Bench
+      ctx.fillStyle = '#1a2332';
+      ctx.fillRect(cx - 28, cy - 6, 56, 6);
+      ctx.fillStyle = '#253040';
+      ctx.fillRect(cx - 26, cy, 4, 18);
+      ctx.fillRect(cx + 22, cy, 4, 18);
+      // PCR/thermocycler machine
+      ctx.fillStyle = active ? '#192535' : '#172030';
+      ctx.strokeStyle = active ? color : '#253040';
+      ctx.lineWidth = 1;
+      roundRect(ctx, cx - 18, cy - 26, 36, 20, 3);
+      ctx.fill(); ctx.stroke();
+      // Display on machine
+      ctx.fillStyle = active ? 'rgba(45,212,191,0.15)' : 'rgba(30,41,59,0.3)';
+      ctx.fillRect(cx - 14, cy - 22, 16, 8);
+      if (active) {
+        ctx.fillStyle = color;
+        ctx.font = '500 6px JetBrains Mono, monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText('72.0°C', cx - 12, cy - 16);
+        // LED
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(cx + 12, cy - 18, 2, 0, Math.PI * 2); ctx.fill();
+      }
+      // Microplate
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(cx - 20, cy - 3, 18, 12);
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 0.3;
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 4; c++) {
+          ctx.beginPath();
+          ctx.arc(cx - 17 + c * 4.5, cy + 1 + r * 3.5, 1.2, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+      break;
+
+    case 'sequencer':
+      // Big sequencing machine (NovaSeq-like)
+      // Machine body
+      ctx.fillStyle = '#172030';
+      ctx.strokeStyle = active ? color : '#253040';
+      ctx.lineWidth = active ? 1.5 : 1;
+      roundRect(ctx, cx - 24, cy - 28, 48, 44, 4);
+      ctx.fill(); ctx.stroke();
+      // Front panel / screen
+      ctx.fillStyle = active ? 'rgba(34,211,238,0.1)' : 'rgba(30,41,59,0.3)';
+      roundRect(ctx, cx - 18, cy - 22, 36, 18, 2);
+      ctx.fill();
+      if (active) {
+        // Progress bar on screen
+        ctx.fillStyle = 'rgba(34,211,238,0.2)';
+        ctx.fillRect(cx - 14, cy - 12, 28, 4);
+        const progress = (frameCount % 120) / 120;
+        ctx.fillStyle = color;
+        ctx.fillRect(cx - 14, cy - 12, 28 * progress, 4);
+        ctx.fillStyle = color;
+        ctx.font = '500 6px JetBrains Mono, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('SEQUENCING', cx, cy - 16);
+      }
+      // Slot
+      ctx.fillStyle = '#0f1520';
+      ctx.fillRect(cx - 10, cy, 20, 4);
+      // Status LEDs
+      ctx.fillStyle = active ? '#34d399' : '#334155';
+      ctx.beginPath(); ctx.arc(cx - 14, cy + 10, 2, 0, Math.PI * 2); ctx.fill();
+      if (active && frameCount % 30 < 15) {
+        ctx.fillStyle = '#fbbf24';
+      } else {
+        ctx.fillStyle = '#334155';
+      }
+      ctx.beginPath(); ctx.arc(cx - 8, cy + 10, 2, 0, Math.PI * 2); ctx.fill();
+      break;
+
+    case 'computer':
+      // Computer desk with dual monitors
+      // Desk
+      ctx.fillStyle = '#1a2332';
+      ctx.fillRect(cx - 36, cy + 2, 72, 5);
+      ctx.fillStyle = '#253040';
+      ctx.fillRect(cx - 32, cy + 7, 4, 16);
+      ctx.fillRect(cx + 28, cy + 7, 4, 16);
+      // Chair
+      ctx.fillStyle = '#1e293b';
+      ctx.beginPath();
+      ctx.arc(cx, cy + 28, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#253040';
+      ctx.fillRect(cx - 1, cy + 20, 2, 8);
+      // Monitor 1 (main)
+      ctx.fillStyle = active ? '#0c1219' : '#131c28';
+      ctx.strokeStyle = active ? 'rgba(56,189,248,0.4)' : '#253040';
+      ctx.lineWidth = 1;
+      roundRect(ctx, cx - 30, cy - 28, 32, 24, 2);
+      ctx.fill(); ctx.stroke();
+      // Monitor stand
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(cx - 16, cy - 4, 4, 6);
+      ctx.fillRect(cx - 20, cy + 1, 12, 2);
+      // Monitor 2
+      ctx.fillStyle = active ? '#0c1219' : '#131c28';
+      ctx.strokeStyle = active ? 'rgba(56,189,248,0.3)' : '#253040';
+      roundRect(ctx, cx + 2, cy - 24, 26, 20, 2);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(cx + 13, cy - 4, 4, 6);
+      ctx.fillRect(cx + 9, cy + 1, 12, 2);
+      // Screen content
+      if (active) {
+        ctx.fillStyle = 'rgba(56,189,248,0.08)';
+        ctx.fillRect(cx - 28, cy - 26, 28, 20);
+        // Code lines
+        for (let i = 0; i < 5; i++) {
+          ctx.fillStyle = `rgba(56,189,248,${0.15 + i * 0.06})`;
+          const w = 8 + Math.sin(i * 2.3 + frameCount * 0.02) * 6;
+          ctx.fillRect(cx - 26, cy - 24 + i * 4, w, 2);
+        }
+        // Second screen - graph
+        ctx.fillStyle = 'rgba(56,189,248,0.06)';
+        ctx.fillRect(cx + 4, cy - 22, 22, 16);
+        ctx.strokeStyle = 'rgba(34,211,238,0.3)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(cx + 6, cy - 8);
+        for (let i = 0; i < 8; i++) {
+          ctx.lineTo(cx + 6 + i * 2.5, cy - 10 - Math.sin(i * 0.8 + frameCount * 0.03) * 5);
+        }
+        ctx.stroke();
+      }
+      // Keyboard
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(cx - 14, cy + 4, 28, 6);
+      // Typing effect
+      if (active && agent.working) {
+        const keyX = cx - 12 + (frameCount % 20) * 1.2;
+        ctx.fillStyle = 'rgba(56,189,248,0.4)';
+        ctx.fillRect(keyX, cy + 5, 3, 4);
+      }
+      break;
+
+    case 'whiteboard':
+      // Whiteboard on wall + standing desk
+      // Board on wall
+      ctx.fillStyle = '#1e293b';
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 1;
+      ctx.fillRect(cx - 28, cy - 34, 56, 32);
+      ctx.strokeRect(cx - 28, cy - 34, 56, 32);
+      // Board content
+      if (active) {
+        ctx.fillStyle = 'rgba(167,139,250,0.1)';
+        ctx.fillRect(cx - 26, cy - 32, 52, 28);
+        // Diagram elements
+        ctx.strokeStyle = 'rgba(167,139,250,0.4)';
+        ctx.lineWidth = 0.8;
+        // Boxes
+        ctx.strokeRect(cx - 20, cy - 28, 14, 8);
+        ctx.strokeRect(cx + 6, cy - 28, 14, 8);
+        ctx.strokeRect(cx - 8, cy - 16, 16, 8);
+        // Arrows
+        ctx.beginPath();
+        ctx.moveTo(cx - 6, cy - 24); ctx.lineTo(cx + 6, cy - 24); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - 20); ctx.lineTo(cx, cy - 16); ctx.stroke();
+        // Checkmark
+        ctx.strokeStyle = '#34d399';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(cx - 4, cy - 12);
+        ctx.lineTo(cx - 1, cy - 9);
+        ctx.lineTo(cx + 5, cy - 15);
+        ctx.stroke();
+      } else {
+        // Faint lines
+        ctx.strokeStyle = '#253040';
+        ctx.lineWidth = 0.5;
+        for (let i = 0; i < 4; i++) {
+          ctx.beginPath();
+          ctx.moveTo(cx - 22, cy - 28 + i * 7);
+          ctx.lineTo(cx + 22, cy - 28 + i * 7);
+          ctx.stroke();
+        }
+      }
+      // Standing desk
+      ctx.fillStyle = '#1a2332';
+      ctx.fillRect(cx - 16, cy + 2, 32, 4);
+      ctx.fillStyle = '#253040';
+      ctx.fillRect(cx - 2, cy + 6, 4, 14);
+      break;
+  }
+
+  ctx.restore();
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+drawLab();
+
+// =====================================================
+// EPISODE DATA + APP LOGIC
+// =====================================================
+const EPISODE = [
+  {
+    action: 'collect_sample', params: 'n_samples=8, tissue="lung"', category: 'wet',
+    budget: 92400, budgetPct: 92.4, time: 165, timePct: 91.7,
+    output: ['Collected 8 lung tissue samples (4 IPF, 4 control)','Tissue quality: excellent | Storage: -80C'],
+    reward: { validity: 0.90, ordering: 1.00, info_gain: 0.10, efficiency: 0.72, novelty: 1.00, penalty: 0.0 },
+    total: 0.45,
+  },
+  {
+    action: 'select_cohort', params: 'criteria="age_matched, sex_balanced"', category: 'wet',
+    budget: 91800, budgetPct: 91.8, time: 162, timePct: 90.0,
+    output: ['Cohort selected: 4 IPF patients (2M/2F, age 58-67)','Controls matched: 4 healthy donors (2M/2F, age 55-65)'],
+    reward: { validity: 0.85, ordering: 0.90, info_gain: 0.15, efficiency: 0.80, novelty: 0.90, penalty: 0.0 },
+    total: 0.38,
+  },
+  {
+    action: 'prepare_library', params: 'protocol="10x_chromium_v3"', category: 'wet',
+    budget: 84200, budgetPct: 84.2, time: 155, timePct: 86.1,
+    output: ['Library prep complete using 10x Chromium v3','Estimated cell capture: ~12,000 cells','cDNA yield: 42ng (good)'],
+    reward: { validity: 0.95, ordering: 1.00, info_gain: 0.20, efficiency: 0.70, novelty: 0.95, penalty: 0.0 },
+    total: 0.52,
+  },
+  {
+    action: 'sequence_cells', params: 'depth="standard", platform="NovaSeq"', category: 'wet',
+    budget: 68500, budgetPct: 68.5, time: 142, timePct: 78.9,
+    output: ['11,847 cells sequenced | 22,438 genes detected','Median reads/cell: 45,200 | Median genes/cell: 3,842','Sequencing saturation: 78.3%'],
+    reward: { validity: 0.95, ordering: 1.00, info_gain: 0.55, efficiency: 0.60, novelty: 0.90, penalty: 0.0 },
+    total: 0.68,
+  },
+  {
+    action: 'run_qc', params: 'tool="scanpy", min_genes=200', category: 'comp',
+    budget: 68100, budgetPct: 68.1, time: 141, timePct: 78.3,
+    output: ['QC complete: 10,234 / 11,847 cells passed (86.4%)','Removed: 382 doublets (3.2%), 1,231 low-quality cells','Mitochondrial threshold: 20% (flagged 847 cells)'],
+    reward: { validity: 0.95, ordering: 1.00, info_gain: 0.35, efficiency: 0.85, novelty: 0.80, penalty: 0.0 },
+    total: 0.55,
+  },
+  {
+    action: 'normalize_data', params: 'method="scran", log_transform=true', category: 'comp',
+    budget: 67900, budgetPct: 67.9, time: 140, timePct: 77.8,
+    output: ['Size-factor normalization (scran) applied','Log1p transform complete | HVG selection: 3,000 genes'],
+    reward: { validity: 0.90, ordering: 1.00, info_gain: 0.25, efficiency: 0.90, novelty: 0.70, penalty: 0.0 },
+    total: 0.42,
+  },
+  {
+    action: 'cluster_cells', params: 'algorithm="leiden", resolution=0.8', category: 'comp',
+    budget: 67500, budgetPct: 67.5, time: 139, timePct: 77.2,
+    output: ['Leiden clustering: 14 clusters identified','AT1 (8.2%), AT2 (12.1%), Fibroblast (15.7%), Macrophage (18.3%)','Endothelial (9.4%), Basal (6.1%), Ciliated (5.8%), NK/T (7.2%)','Smooth Muscle (4.1%), Mast (2.9%), B cell (3.4%), pDC (2.0%)','Mesothelial (2.6%), Aberrant Basaloid (2.2%)'],
+    reward: { validity: 0.95, ordering: 1.00, info_gain: 0.65, efficiency: 0.85, novelty: 0.85, penalty: 0.0 },
+    total: 0.72,
+    discovery: { title: '14 cell populations identified', detail: 'Including Aberrant Basaloid cells (IPF-associated)', color: 'var(--cyan)', bg: 'var(--cyan-dim)' },
+  },
+  {
+    action: 'differential_expression', params: 'method="DESeq2", contrast="IPF_vs_Ctrl"', category: 'comp',
+    budget: 67000, budgetPct: 67.0, time: 137, timePct: 76.1,
+    output: ['1,847 DE genes (|log2FC| > 1, padj < 0.05)','Top upregulated in IPF:','  SPP1   log2FC=3.42  padj=1.2e-18','  MMP7   log2FC=2.89  padj=3.4e-15','  COL1A1 log2FC=2.67  padj=8.7e-14','  TGFB1  log2FC=1.95  padj=2.1e-09','Top downregulated: AGER (-3.1), SFTPC (-2.8), HOPX (-2.3)'],
+    reward: { validity: 0.95, ordering: 1.00, info_gain: 0.78, efficiency: 0.80, novelty: 0.88, penalty: 0.0 },
+    total: 0.82,
+    discovery: { title: 'SPP1 strongly upregulated in IPF', detail: 'log2FC=3.42, padj=1.2e-18', color: 'var(--pink)', bg: 'rgba(244,114,182,0.10)' },
+  },
+  {
+    action: 'pathway_enrichment', params: 'tool="gseapy", gene_sets="KEGG,Reactome"', category: 'comp',
+    budget: 66600, budgetPct: 66.6, time: 136, timePct: 75.6,
+    output: ['Top enriched pathways (IPF vs Control):','  ECM-receptor interaction     padj=4.2e-12','  TGF-beta signaling           padj=1.8e-09','  PI3K-Akt signaling           padj=3.1e-07','  Focal adhesion               padj=8.9e-07','SPP1 participates in 3/4 top pathways'],
+    reward: { validity: 0.90, ordering: 1.00, info_gain: 0.60, efficiency: 0.85, novelty: 0.75, penalty: 0.0 },
+    total: 0.58,
+    discovery: { title: 'SPP1 in ECM/TGF-beta/PI3K pathways', detail: 'Core fibrosis signaling axis confirmed', color: 'var(--purple)', bg: 'rgba(167,139,250,0.10)' },
+  },
+  {
+    action: 'marker_selection', params: 'candidates=["SPP1","MMP7","COL1A1"]', category: 'comp',
+    budget: 66200, budgetPct: 66.2, time: 135, timePct: 75.0,
+    output: ['Marker ranking by discriminative power:','  1. SPP1   - AUROC: 0.94, specificity: 0.89','  2. MMP7   - AUROC: 0.87, specificity: 0.82','  3. COL1A1 - AUROC: 0.81, specificity: 0.76','SPP1 selected as primary biomarker candidate'],
+    reward: { validity: 0.90, ordering: 1.00, info_gain: 0.50, efficiency: 0.88, novelty: 0.70, penalty: 0.0 },
+    total: 0.55,
+  },
+  {
+    action: 'validate_marker', params: 'gene="SPP1", method="cross_validation"', category: 'comp',
+    budget: 65200, budgetPct: 65.2, time: 130, timePct: 72.2,
+    output: ['SPP1 Biomarker Validation Report:','  5-fold CV AUROC:    0.91 (+/- 0.03)','  Sensitivity:         0.88','  Specificity:         0.87','  Positive LR:         6.77','  Expression in Aberrant Basaloid: 94.2% of cells','  Status: VALIDATED as IPF biomarker'],
+    reward: { validity: 0.95, ordering: 1.00, info_gain: 0.72, efficiency: 0.82, novelty: 0.85, penalty: 0.0 },
+    total: 0.76,
+    discovery: { title: 'SPP1 validated as IPF biomarker', detail: 'AUROC=0.91, specificity=0.87', color: 'var(--green)', bg: 'var(--green-dim)' },
+  },
+  {
+    action: 'synthesize_conclusion', params: 'confidence=0.85', category: 'meta',
+    budget: 65000, budgetPct: 65.0, time: 129, timePct: 71.7,
+    output: ['CONCLUSION (confidence: 0.85):','','SPP1 is a validated biomarker for IPF with strong','discriminative power (AUROC=0.91). It is upregulated','3.42-fold in IPF lungs, concentrated in Aberrant Basaloid','cells (94.2%), and participates in ECM-receptor, TGF-beta,','and PI3K-Akt signaling pathways.','','Literature match: 4/5 expected findings confirmed','Calibration: Well-calibrated (no overconfidence penalty)'],
+    reward: { validity: 1.00, ordering: 1.00, info_gain: 0.40, efficiency: 0.90, novelty: 0.50, penalty: 0.0 },
+    total: 0.91, terminal: true,
+  },
+];
+
+// State
+let running = false;
+let cumReward = 0;
+
+// DOM refs
+const terminalEl = document.getElementById('terminal');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const runBtn = document.getElementById('runBtn');
+const labActionLabel = document.getElementById('labActionLabel');
+
+// Helpers
+function addLine(html) {
+  const div = document.createElement('div');
+  div.className = 't-line';
+  div.innerHTML = html || '&nbsp;';
+  terminalEl.appendChild(div);
+  terminalEl.scrollTop = terminalEl.scrollHeight;
+}
+
+function setGauge(id, value, pct, color) {
+  document.getElementById(id + 'Val').textContent = value;
+  const fill = document.getElementById(id + 'Fill');
+  fill.style.width = pct + '%';
+  if (color) fill.style.background = color;
+}
+
+function setRewardBars(r) {
+  for (const key of ['validity','ordering','info_gain','efficiency','novelty','penalty']) {
+    const el = document.getElementById('rw-' + key);
+    el.style.width = (r[key] * 100) + '%';
+    el.textContent = r[key] > 0.01 ? r[key].toFixed(2) : '';
+  }
+}
+
+function clearRewardBars() {
+  for (const key of ['validity','ordering','info_gain','efficiency','novelty','penalty']) {
+    const el = document.getElementById('rw-' + key);
+    el.style.width = '0%';
+    el.textContent = '';
+  }
+}
+
+function addPipeStep(step, index) {
+  const el = document.createElement('div');
+  el.className = 'pipe-step';
+  el.id = 'pipe-' + index;
+  const catColor = step.category === 'wet' ? 'var(--green)' : step.category === 'comp' ? 'var(--accent)' : 'var(--pink)';
+  el.innerHTML = `<div class="step-icon" style="color:${catColor};border-color:${catColor};">${index + 1}</div><span>${step.action}</span>`;
+  document.getElementById('pipelineSteps').appendChild(el);
+  requestAnimationFrame(() => el.classList.add('visible'));
+  return el;
+}
+
+function addDiscovery(d) {
+  const c = document.getElementById('discoveries');
+  if (c.querySelector('.empty-state')) c.innerHTML = '';
+  const el = document.createElement('div');
+  el.className = 'discovery';
+  el.innerHTML = `<div class="disc-icon" style="background:${d.bg};color:${d.color};">&#9670;</div><div class="disc-body"><div class="disc-title">${d.title}</div><div class="disc-detail">${d.detail}</div></div>`;
+  c.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('visible'));
+}
+
+function addRewardHistory(step, index) {
+  const c = document.getElementById('rewardHistory');
+  if (c.querySelector('.empty-state')) c.innerHTML = '';
+  const el = document.createElement('div');
+  el.className = 'step-reward-mini';
+  el.innerHTML = `<span class="srm-name">${index + 1}. ${step.action}</span><span class="srm-val ${step.total >= 0 ? 'pos' : 'neg'}">${step.total >= 0 ? '+' : ''}${step.total.toFixed(2)}</span>`;
+  c.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('visible'));
+}
+
+function selectScenario(el) {
+  if (running) return;
+  document.querySelectorAll('.scenario-opt').forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
+}
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ---- Run ----
+async function startDemo() {
+  if (running) return;
+  running = true;
+  runBtn.disabled = true;
+  runBtn.textContent = 'Running...';
+  statusDot.classList.add('live');
+  statusText.textContent = 'Running';
+  terminalEl.innerHTML = '';
+  cumReward = 0;
+  document.getElementById('pipelineSteps').innerHTML = '';
+  document.getElementById('discoveries').innerHTML = '<div class="empty-state">No discoveries yet</div>';
+  document.getElementById('rewardHistory').innerHTML = '<div class="empty-state">No steps yet</div>';
+  document.getElementById('violations').innerHTML = '<div class="empty-state">No violations</div>';
+  clearRewardBars();
+  document.getElementById('cumReward').textContent = '0.00';
+  document.getElementById('stepRewardLabel').textContent = '--';
+  initAgent();
+
+  addLine('<span class="t-label">[BioEnv]</span> <span class="t-dim">Initializing environment...</span>');
+  await wait(500);
+  addLine('<span class="t-label">[BioEnv]</span> Scenario: <span class="t-str">biomarker_validation_lung</span> (Hard)');
+  await wait(200);
+  addLine('<span class="t-label">[BioEnv]</span> Organism: <span class="t-str">Homo sapiens</span> | Tissue: <span class="t-str">Lung</span>');
+  await wait(200);
+  addLine('<span class="t-label">[BioEnv]</span> Budget: <span class="t-num">$100,000</span> | Time: <span class="t-num">180 days</span> | Max steps: <span class="t-num">30</span>');
+  await wait(200);
+  addLine('<span class="t-label">[BioEnv]</span> Task: Validate <span class="t-kw">SPP1</span> as biomarker for idiopathic pulmonary fibrosis');
+  await wait(400);
+  addLine('');
+
+  for (let i = 0; i < EPISODE.length; i++) {
+    await runStep(i);
+    await wait(500);
+  }
+
+  // Done
+  moveAgentTo('idle');
+  labActionLabel.classList.remove('visible');
+  addLine('');
+  addLine('<span class="t-label">[BioEnv]</span> <span class="t-ok">Episode complete!</span>');
+  addLine('<span class="t-label">[BioEnv]</span> Total reward: <span class="t-ok">+' + cumReward.toFixed(2) + '</span> | Steps: <span class="t-num">' + EPISODE.length + '</span> | Budget remaining: <span class="t-num">$65,000</span>');
+  addLine('<span class="t-label">[BioEnv]</span> Literature match: <span class="t-ok">4/5 expected findings confirmed</span>');
+  addLine('<span class="t-label">[BioEnv]</span> Calibration: <span class="t-ok">Well-calibrated</span> (no overconfidence penalty)');
+
+  statusDot.classList.remove('live');
+  statusText.textContent = 'Complete';
+  runBtn.textContent = 'Run Episode';
+  runBtn.disabled = false;
+  running = false;
+}
+
+async function runStep(i) {
+  const step = EPISODE[i];
+  const station = ACTION_STATION[step.action] || 'computer';
+
+  // Move agent in lab
+  moveAgentTo(station);
+  labActionLabel.textContent = step.action + '()';
+  labActionLabel.classList.add('visible');
+  await wait(800); // wait for agent to travel
+
+  // Start working animation
+  setAgentWorking(step.action);
+  spawnParticles(agent.targetX, agent.targetY, STATIONS[station].color);
+
+  // Pipeline sidebar
+  const pipeEl = addPipeStep(step, i);
+  if (i > 0) {
+    const prev = document.getElementById('pipe-' + (i - 1));
+    prev.classList.remove('active');
+    prev.classList.add('done');
+    prev.querySelector('.step-icon').innerHTML = '&#10003;';
+  }
+  pipeEl.classList.add('active');
+
+  // Gauges
+  setGauge('budget', '$' + step.budget.toLocaleString(), step.budgetPct,
+    step.budgetPct > 50 ? 'var(--green)' : step.budgetPct > 25 ? 'var(--amber)' : 'var(--red)');
+  setGauge('time', step.time + ' / 180 days', step.timePct, 'var(--cyan)');
+  setGauge('step', (i + 1) + ' / 30', ((i + 1) / 30 * 100), 'var(--accent)');
+
+  // Terminal output
+  const catTag = step.category === 'wet' ? '<span class="t-ok">WET</span>'
+    : step.category === 'comp' ? '<span class="t-label">CMP</span>'
+    : '<span class="t-kw">META</span>';
+  addLine(`<span class="t-dim">Step ${i + 1}</span>  ${catTag}  <span class="t-fn">${step.action}</span>(<span class="t-str">${step.params}</span>)`);
+  await wait(300);
+
+  for (const line of step.output) {
+    addLine('  <span class="t-sub">' + line + '</span>');
+    await wait(80);
+  }
+
+  // Reward
+  cumReward += step.total;
+  document.getElementById('stepRewardLabel').textContent = 'Step ' + (i + 1) + ': ' + step.action;
+  setRewardBars(step.reward);
+  document.getElementById('cumReward').textContent = cumReward.toFixed(2);
+  addRewardHistory(step, i);
+
+  const rewardStr = step.total >= 0
+    ? '<span class="t-ok">+' + step.total.toFixed(2) + '</span>'
+    : '<span class="t-err">' + step.total.toFixed(2) + '</span>';
+  addLine(`  <span class="t-dim">reward: ${rewardStr}  <span class="t-dim">(cumulative: ${cumReward.toFixed(2)})</span></span>`);
+  addLine('');
+
+  if (step.discovery) addDiscovery(step.discovery);
+
+  // Done working
+  agent.working = false;
+  spawnParticles(agent.targetX, agent.targetY, '#34d399', 6);
+
+  if (step.terminal) {
+    pipeEl.classList.remove('active');
+    pipeEl.classList.add('done');
+    pipeEl.querySelector('.step-icon').innerHTML = '&#10003;';
+  }
+}
+
+function resetDemo() {
+  if (running) return;
+  terminalEl.innerHTML = '';
+  cumReward = 0;
+  document.getElementById('pipelineSteps').innerHTML = '';
+  document.getElementById('discoveries').innerHTML = '<div class="empty-state">No discoveries yet</div>';
+  document.getElementById('rewardHistory').innerHTML = '<div class="empty-state">No steps yet</div>';
+  document.getElementById('violations').innerHTML = '<div class="empty-state">No violations</div>';
+  clearRewardBars();
+  document.getElementById('cumReward').textContent = '0.00';
+  document.getElementById('stepRewardLabel').textContent = '--';
+  setGauge('budget', '$100,000', 100, 'var(--green)');
+  setGauge('time', '180 / 180 days', 100, 'var(--cyan)');
+  setGauge('step', '0 / 30', 0, 'var(--accent)');
+  statusDot.classList.remove('live');
+  statusText.textContent = 'Ready';
+  labActionLabel.classList.remove('visible');
+  initAgent();
+  addLine('<span class="t-dim">Environment reset. Click "Run Episode" to start.</span>');
+}
+
+// Init
+addLine('<span class="t-dim">BioEnv v1.0 | biomarker_validation_lung</span>');
+addLine('<span class="t-dim">Click "Run Episode" to start the demo.</span>');
+</script>
+</body>
+</html>
