@@ -6,15 +6,15 @@
   "gen_time_s": 0.0,
   "model_response_raw": "",
   "model_thinking": "",
-  "thinking_enabled": false,
+  "thinking_enabled": true,
   "task": {
     "problem_statement": "Validate candidate biomarker INS for type 2 diabetes in pancreas tissue using single-cell RNA sequencing.",
     "organism": "human",
-    "tissue": "pancreas",
+    "tissue": "tumor",
     "modality": "scRNA-seq",
     "conditions": [
-      "healthy",
-      "type2_diabetes"
+      "tumor",
+      "adjacent_normal"
     ],
     "budget_limit": 85043.88301343405,
     "time_limit_days": 100.93688306304155
@@ -69,20 +69,64 @@
         "proportion": 0.122,
         "marker_genes": [
           "CD68",
-          "CD163"
+          "MRC1",
+          "CD163",
+          "IL10"
+        ],
+        "state": "M2_like"
+      },
+      {
+        "name": "T_cell",
+        "proportion": 0.201,
+        "marker_genes": [
+          "CD3D",
+          "CD8A",
+          "GZMB",
+          "PDCD1"
+        ],
+        "state": "exhausted"
+      },
+      {
+        "name": "fibroblast",
+        "proportion": 0.221,
+        "marker_genes": [
+          "FAP",
+          "ACTA2",
+          "COL1A1",
+          "PDPN"
+        ],
+        "state": "CAF"
+      },
+      {
+        "name": "malignant",
+        "proportion": 0.226,
+        "marker_genes": [
+          "EPCAM",
+          "KRT18",
+          "MKI67"
+        ],
+        "state": "tumor"
+      },
+      {
+        "name": "endothelial",
+        "proportion": 0.142,
+        "marker_genes": [
+          "PECAM1",
+          "VWF",
+          "CDH5"
         ],
         "state": "quiescent"
       }
     ],
     "true_markers": [
-      "INS",
-      "TXNIP",
-      "IAPP",
-      "DDIT3"
+      "MRC1",
+      "CD163",
+      "FAP",
+      "EPCAM"
     ],
     "causal_mechanisms": [
-      "ER stress-induced beta cell apoptosis",
-      "glucotoxicity-driven beta cell dedifferentiation"
+      "TAM-driven immune suppression",
+      "CAF\u2013tumor crosstalk"
     ],
     "true_pathways": {
       "insulin_signalling": 0.395,
@@ -91,7 +135,7 @@
       "glucagon_signalling": 0.738,
       "apoptosis": 0.673
     },
-    "true_de_genes_count": 9,
+    "true_de_genes_count": 6,
     "true_regulatory_network_size": 0,
     "confounders": {},
     "n_true_cells": 15839,
@@ -115,6 +159,7 @@
       "data_normalized": false,
       "batches_integrated": false,
       "cells_clustered": false,
+      "cell_types_annotated": false,
       "de_performed": false,
       "trajectories_inferred": false,
       "pathways_analyzed": false,
@@ -124,12 +169,17 @@
       "followup_designed": false,
       "subagent_review_requested": false,
       "conclusion_reached": false,
+      "confounders_assessed": false,
+      "analysis_rerun_counts": {},
       "n_cells_sequenced": null,
       "n_cells_after_filter": null,
       "n_clusters_found": null,
       "n_de_genes_found": null,
-      "n_markers_found": null
+      "n_markers_found": null,
+      "n_cohort_per_group": null
     },
-    "hidden_failure_conditions": []
+    "hidden_failure_conditions": [
+      "Composition-driven differential expression can mimic true DE."
+    ]
   }
 }

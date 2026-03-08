@@ -44,7 +44,10 @@ class TestNoiseModel:
     def test_false_positives(self):
         n = NoiseModel(seed=0)
         fps = n.generate_false_positives(1000, 0.01)
-        assert all(g.startswith("FP_GENE_") for g in fps)
+        # FP genes are drawn from a realistic background pool, not FP_GENE_i
+        from server.simulator.noise import _BACKGROUND_GENES
+        assert all(g in _BACKGROUND_GENES for g in fps)
+        assert len(fps) >= 0  # count depends on fdr
 
     def test_quality_degradation_bounded(self):
         n = NoiseModel(seed=0)

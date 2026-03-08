@@ -6,6 +6,30 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
+# Housekeeping and commonly detected human genes for realistic false-positive
+# sampling (agent cannot distinguish true vs. false hits by name format alone).
+_BACKGROUND_GENES: List[str] = [
+    "ACTB", "GAPDH", "B2M", "RPL13A", "RPS18", "EEF1A1", "HSP90AB1", "HSPA8",
+    "VIM", "TUBA1B", "FTL", "FTH1", "S100A4", "S100A6", "LGALS1", "ANXA2",
+    "FLNA", "YBX1", "NPM1", "PCNA", "TMSB4X", "CD63", "CD81", "CD9", "ALB",
+    "TUBB", "TUBB4B", "RPLP0", "RPLP1", "RPS3", "RPS4X", "RPS5", "RPS6",
+    "RPS7", "RPS8", "RPS9", "RPS10", "RPS11", "RPS12", "RPS13", "RPS14",
+    "RPS15", "RPS16", "RPS17", "RPS19", "RPS20", "RPS21", "RPS23", "RPS24",
+    "RPS25", "RPS26", "RPS27", "RPS27A", "RPS28", "RPS29", "RPL3", "RPL4",
+    "RPL5", "RPL6", "RPL7", "RPL7A", "RPL8", "RPL9", "RPL10", "RPL10A",
+    "RPL11", "RPL12", "RPL14", "RPL15", "RPL17", "RPL18", "RPL18A", "RPL19",
+    "RPL21", "RPL22", "RPL23", "RPL23A", "RPL24", "RPL26", "RPL27", "RPL28",
+    "RPL29", "RPL30", "RPL31", "RPL32", "RPL34", "RPL35", "RPL35A", "RPL36",
+    "RPL36AL", "RPL37", "RPL37A", "RPL38", "RPL39", "RPL40", "RPL41",
+    "EEF1B2", "EEF1D", "EEF2", "HSP90AA1", "HSPA1A", "HSPA1B", "HSPA5",
+    "HSPA9", "HSPB1", "HSPD1", "DNAJA1", "DNAJB1", "PPIA", "PPIB", "PPIG",
+    "CST3", "CSTB", "SRP14", "SRP68", "SRP72", "ATP5F1A", "ATP5F1B", "ATP5F1C",
+    "COX4I1", "COX5A", "NDUFA4", "NDUFB2", "UBC", "UBA52", "RPS3A", "RACK1",
+    "LDHA", "PKM", "ENO1", "PGK1", "TPI1", "GPI", "ALDOA", "GAPDH", "PGAM1",
+    "LDHB", "PFKL", "SLC25A5", "SLC25A6", "VDAC1", "VDAC2", "CYCS", "COX7A2",
+    "ATP6V1A", "ATP6V1B2", "ATP6V1D", "ATP6V1E1", "ATP6V0D1", "ATP6V0E1",
+]
+
 
 class NoiseModel:
     """Generates calibrated noise for simulated experimental outputs.
@@ -77,7 +101,13 @@ class NoiseModel:
         self, n_background_genes: int, fdr: float
     ) -> List[str]:
         n_fp = int(self.rng.binomial(n_background_genes, fdr))
-        return [f"FP_GENE_{i}" for i in range(n_fp)]
+        n_sample = min(n_fp, len(_BACKGROUND_GENES))
+        if n_sample <= 0:
+            return []
+        indices = self.rng.choice(
+            len(_BACKGROUND_GENES), size=n_sample, replace=False
+        )
+        return [_BACKGROUND_GENES[int(i)] for i in indices]
 
     def generate_false_negatives(
         self, true_genes: List[str], fnr: float

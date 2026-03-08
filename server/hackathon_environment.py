@@ -32,7 +32,7 @@ from server.simulator.transition import ACTION_COSTS, TransitionEngine, compute_
 from server.tasks.generator import TaskGenerator
 
 
-MAX_STEPS = 30
+MAX_STEPS = 40
 
 
 class BioExperimentEnvironment(Environment):

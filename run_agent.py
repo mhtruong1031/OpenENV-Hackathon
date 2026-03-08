@@ -10,12 +10,21 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
+
+# Optional: register NPU backend (Huawei Ascend) so torch.npu is available
+try:
+    import torch_npu  # noqa: F401
+except ImportError:
+    pass
+
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 from models import (
     ActionType,
     ExperimentAction,
     ExperimentObservation,
+    IntermediateOutput,
+    OutputType,
     build_agent_observation_context,
     build_agent_system_prompt,
 )
@@ -36,8 +45,8 @@ def _parse_thinking_flag() -> bool:
 
 ENABLE_THINKING = _parse_thinking_flag()
 
-MODEL_ID = "Qwen/Qwen3.5-2B"
-MAX_EPISODE_STEPS = int(os.getenv("RUN_AGENT_MAX_EPISODE_STEPS", "20"))
+MODEL_ID = "Qwen/Qwen3.5-0.8B"
+MAX_EPISODE_STEPS = int(os.getenv("RUN_AGENT_MAX_EPISODE_STEPS", "35"))
 PIPELINE_TASK = "text-generation"
 
 ACTION_TYPES = [a.value for a in ActionType]
@@ -50,6 +59,8 @@ ACTION_TYPE_ALIASES = {
     "qc": ActionType.RUN_QC.value,
     "run_quality_control": ActionType.RUN_QC.value,
     "cluster": ActionType.CLUSTER_CELLS.value,
+    "annotate": ActionType.ANNOTATE_CELL_TYPES.value,
+    "annotate_cell_types": ActionType.ANNOTATE_CELL_TYPES.value,
     "de_analysis": ActionType.DIFFERENTIAL_EXPRESSION.value,
     "differential_expression_analysis": ActionType.DIFFERENTIAL_EXPRESSION.value,
     "trajectory_inference": ActionType.TRAJECTORY_ANALYSIS.value,
@@ -71,11 +82,15 @@ STANDARD_PIPELINE_ORDER = [
     ActionType.NORMALIZE_DATA,
     ActionType.INTEGRATE_BATCHES,
     ActionType.CLUSTER_CELLS,
+    ActionType.ANNOTATE_CELL_TYPES,
     ActionType.DIFFERENTIAL_EXPRESSION,
     ActionType.PATHWAY_ENRICHMENT,
     ActionType.MARKER_SELECTION,
     ActionType.TRAJECTORY_ANALYSIS,
     ActionType.REGULATORY_NETWORK_INFERENCE,
+    ActionType.ASSESS_CONFOUNDERS,
+    ActionType.STRATIFY_BY_COVARIATE,
+    ActionType.RUN_SENSITIVITY_ANALYSIS,
     ActionType.SYNTHESIZE_CONCLUSION,
 ]
 
@@ -95,13 +110,73 @@ def compact_preview(value: Any, max_chars: int = 160) -> str:
     return text[: max_chars - 3] + "..."
 
 
-def format_observation(obs: ExperimentObservation) -> str:
+def format_step_data(output: Optional[IntermediateOutput]) -> str:
+    """Format the latest step output for the observation prompt by output_type."""
+    if output is None or not getattr(output, "data", None):
+        return compact_preview(getattr(output, "data", None) or {}, 200)
+    data = output.data
+    try:
+        ot = getattr(output, "output_type", None)
+    except Exception:
+        ot = None
+    if ot == OutputType.DE_RESULT:
+        top_genes = data.get("top_genes", [])[:5]
+        lines = [f"  {g.get('gene', '')} log2FC={g.get('log2FC', '')}" for g in top_genes if isinstance(g, dict)]
+        if not lines:
+            lines = [str(g) for g in top_genes[:5]]
+        n_sig = data.get("n_significant", "N/A")
+        return "\n".join(lines) + f"\nn_significant: {n_sig}"
+    if ot == OutputType.CLUSTER_RESULT:
+        n_clusters = data.get("n_clusters", "N/A")
+        sil = data.get("silhouette_score", "N/A")
+        sizes = data.get("cluster_sizes", [])[:3]
+        return f"n_clusters: {n_clusters}, silhouette_score: {sil}, cluster_sizes (first 3): {sizes}"
+    if ot == OutputType.QC_METRICS:
+        d = data.get("doublet_fraction", "N/A")
+        m = data.get("mitochondrial_fraction", "N/A")
+        a = data.get("ambient_rna_fraction", "N/A")
+        return f"doublet_fraction: {d}, mitochondrial_fraction: {m}, ambient_rna_fraction: {a}"
+    if ot == OutputType.PATHWAY_RESULT:
+        top = data.get("top_pathways", [])[:5]
+        lines = []
+        for p in top:
+            if isinstance(p, dict):
+                lines.append(f"  {p.get('pathway', '')} score={p.get('score', '')}")
+            else:
+                lines.append(f"  {p}")
+        return "\n".join(lines) if lines else compact_preview(data, 200)
+    if ot == OutputType.MARKER_RESULT:
+        markers = data.get("markers", [])[:8]
+        qm = data.get("quality_metrics", {}) or {}
+        fp = qm.get("estimated_false_positive_rate", "N/A")
+        return f"markers (first 8): {markers}\nestimated_false_positive_rate: {fp}"
+    if ot == OutputType.ANALYSIS_RESULT and "detected_confounders" in data:
+        conf = data["detected_confounders"]
+        lines = [f"  {c.get('name', '')} strength={c.get('estimated_strength', '')}" for c in conf if isinstance(c, dict)]
+        return "\n".join(lines) if lines else compact_preview(data, 200)
+    return compact_preview(data, 200)
+
+
+def format_observation(
+    obs: ExperimentObservation,
+    *,
+    hypothesis_log: Optional[List[str]] = None,
+    running_hypotheses: Optional[List[str]] = None,
+) -> str:
     parts = [
         f"TASK: {obs.task.problem_statement}",
         f"Organism: {obs.task.organism} | Tissue: {obs.task.tissue}",
         f"Conditions: {', '.join(obs.task.conditions) or 'N/A'}",
         f"Step: {obs.step_index} | Budget: ${obs.resource_usage.budget_remaining:,.0f} | Time: {obs.resource_usage.time_remaining_days:.0f}d",
     ]
+    if hypothesis_log:
+        parts.append("Your recent reasoning (from prior steps):")
+        for entry in hypothesis_log:
+            parts.append(f"  > {entry}")
+    if running_hypotheses:
+        parts.append("Working hypotheses:")
+        for entry in running_hypotheses:
+            parts.append(f"  - {entry}")
     context = build_agent_observation_context(obs, max_tools=5, max_assays=2)
     if context:
         parts.append(context)
@@ -123,10 +198,8 @@ def format_observation(obs: ExperimentObservation) -> str:
         if remaining:
             parts.append(f"Remaining steps (choose one): {', '.join(remaining)}")
 
-    if obs.latest_output and obs.latest_output.data:
-        parts.append(
-            f"Latest data: {compact_preview(obs.latest_output.data, 200)}"
-        )
+    if obs.latest_output:
+        parts.append(f"Latest data: {format_step_data(obs.latest_output)}")
     if obs.rule_violations:
         parts.append(f"VIOLATIONS: {obs.rule_violations}")
     if obs.discovered_markers:
@@ -318,6 +391,7 @@ def normalize_action_type(raw_action_type: Any) -> Optional[str]:
         (("normal",), ActionType.NORMALIZE_DATA.value),
         (("integrat", "batch"), ActionType.INTEGRATE_BATCHES.value),
         (("cluster",), ActionType.CLUSTER_CELLS.value),
+        (("annotat",), ActionType.ANNOTATE_CELL_TYPES.value),
         (("differential", "expression"), ActionType.DIFFERENTIAL_EXPRESSION.value),
         (("pathway",), ActionType.PATHWAY_ENRICHMENT.value),
         (("trajectory",), ActionType.TRAJECTORY_ANALYSIS.value),
@@ -659,8 +733,17 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
-def build_observation_prompt(obs: ExperimentObservation) -> str:
-    return format_observation(obs)
+def build_observation_prompt(
+    obs: ExperimentObservation,
+    *,
+    hypothesis_log: Optional[List[str]] = None,
+    running_hypotheses: Optional[List[str]] = None,
+) -> str:
+    return format_observation(
+        obs,
+        hypothesis_log=hypothesis_log,
+        running_hypotheses=running_hypotheses,
+    )
 
 
 def run_with_pipeline(pipe, prompt: str) -> str:
@@ -681,14 +764,46 @@ def run_with_pipeline(pipe, prompt: str) -> str:
     return text.strip() if isinstance(text, str) else ""
 
 
+def _npu_available() -> bool:
+    """Check if NPU (e.g. Huawei Ascend via torch_npu) is available."""
+    if not getattr(torch, "npu", None):
+        return False
+    try:
+        return bool(torch.npu.is_available())
+    except Exception:
+        return False
+
+
 def resolve_torch_runtime() -> Dict[str, Any]:
-    use_cuda = torch.cuda.is_available()
+    # Optional: force device via env (e.g. RUN_AGENT_DEVICE=npu, cuda, cpu)
+    force_device = os.getenv("RUN_AGENT_DEVICE", "").strip().lower()
+    use_npu = (force_device == "npu") or (
+        force_device != "cuda" and force_device != "cpu" and _npu_available()
+    )
+    use_cuda = (force_device == "cuda" or (not use_npu and torch.cuda.is_available()))
+
+    if use_npu:
+        bf16 = getattr(torch.npu, "is_bf16_supported", lambda: True)()
+        dtype = torch.bfloat16 if bf16 else torch.float16
+        try:
+            device_name = torch.npu.get_device_name(0) if torch.npu.device_count() else "npu"
+        except Exception:
+            device_name = "npu"
+        return {
+            "use_cuda": False,
+            "use_npu": True,
+            "device": "npu:0",
+            "dtype": dtype,
+            "device_map": "auto",
+            "device_name": device_name,
+        }
     bf16 = bool(getattr(torch.cuda, "is_bf16_supported", lambda: False)()) if use_cuda else False
     dtype = torch.bfloat16 if bf16 else (
         torch.float16 if use_cuda else torch.float32
     )
     return {
         "use_cuda": use_cuda,
+        "use_npu": False,
         "device": "cuda:0" if use_cuda else "cpu",
         "dtype": dtype,
         "device_map": "auto" if use_cuda else None,
@@ -703,20 +818,27 @@ def main():
     active_pipeline = None
 
     runtime = resolve_torch_runtime()
+    backend = "npu" if runtime.get("use_npu") else ("cuda" if runtime["use_cuda"] else "cpu")
     log(
-        f"Using local model runtime: device={runtime['device']} "
+        f"Using local model runtime: backend={backend} device={runtime['device']} "
         f"name={runtime['device_name']} dtype={runtime['dtype']}"
     )
 
     if USE_PIPELINE:
         log(f"Loading pipeline ({PIPELINE_TASK}) for {MODEL_ID} ...")
         try:
+            if runtime.get("use_npu"):
+                pipe_device = runtime["device"]  # "npu:0"
+            elif runtime["use_cuda"]:
+                pipe_device = 0
+            else:
+                pipe_device = -1
             active_pipeline = pipeline(
                 PIPELINE_TASK,
                 model=MODEL_ID,
                 trust_remote_code=True,
                 dtype=runtime["dtype"],
-                device=0 if runtime["use_cuda"] else -1,
+                device=pipe_device,
             )
             log("Pipeline loaded.")
         except Exception as exc:
@@ -784,13 +906,27 @@ def main():
         cumulative_reward = 0.0
         write_dashboard_state(env, obs, step=0, cumulative_reward=0.0)
 
+        hypothesis_log: List[str] = []
+        running_hypotheses: List[str] = []
+        ANALYSIS_STEPS = {
+            ActionType.DIFFERENTIAL_EXPRESSION,
+            ActionType.CLUSTER_CELLS,
+            ActionType.PATHWAY_ENRICHMENT,
+            ActionType.REGULATORY_NETWORK_INFERENCE,
+            ActionType.MARKER_SELECTION,
+        }
+
         for step in range(MAX_EPISODE_STEPS):
             cmd = check_dashboard_command()
             if cmd and cmd.get("action") == "restart":
                 log("\n[DASHBOARD] Restart requested — ending episode early.")
                 break
 
-            user_msg = build_observation_prompt(obs)
+            user_msg = build_observation_prompt(
+                obs,
+                hypothesis_log=hypothesis_log,
+                running_hypotheses=running_hypotheses,
+            )
 
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -818,7 +954,11 @@ def main():
             if active_pipeline is not None:
                 response = run_with_pipeline(active_pipeline, prompt)
                 if not response:
-                    response = format_observation(obs)
+                    response = format_observation(
+                        obs,
+                        hypothesis_log=hypothesis_log,
+                        running_hypotheses=running_hypotheses,
+                    )
             else:
                 assert tokenizer is not None and model is not None
                 inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
@@ -852,21 +992,13 @@ def main():
                     if len(parts) == 2:
                         thinking = parts[0].replace("<think>", "").strip()
                         response = parts[1].strip()
-
-            is_last_step = (step == MAX_EPISODE_STEPS - 1)
+            if thinking:
+                hypothesis_log = (hypothesis_log + [thinking[:300]])[-3:]
 
             action = parse_action(response)
             if action is None:
-                if is_last_step:
-                    log(f"\n  [!] Parse failed on final step — forcing synthesize_conclusion.")
-                    action = ExperimentAction(
-                        action_type=ActionType.SYNTHESIZE_CONCLUSION,
-                        justification="forced terminal conclusion",
-                        confidence=0.5,
-                    )
-                else:
-                    log(f"\n  [!] Parse failed, skipping step. Raw: {response[:150]}")
-                    continue
+                log(f"\n  [!] Parse failed, skipping step. Raw: {response[:150]}")
+                continue
 
             completed_types = {
                 r.action_type for r in obs.pipeline_history if r.success
@@ -879,23 +1011,22 @@ def main():
 
             if should_force_terminal_conclusion(action, completed_types):
                 log(
-                    f"\n  [!] repeated completed meta step {action.action_type.value} "
-                    f"— forcing synthesize_conclusion."
+                    f"\n  [!] repeated completed meta step {action.action_type.value}, skipping."
                 )
-                action = ExperimentAction(
-                    action_type=ActionType.SYNTHESIZE_CONCLUSION,
-                    justification="repeated completed meta step forced terminal conclusion",
-                    confidence=action.confidence,
-                )
-                completed_types = {
-                    r.action_type for r in obs.pipeline_history if r.success
-                }
+                continue
 
             skip_reason = None
             if action.action_type in completed_types:
-                skip_reason = (
-                    f"blocked repeat of completed step {action.action_type.value}"
-                )
+                allow_rerun = action.parameters.get("allow_rerun") is True
+                rerunable = action.action_type in {
+                    ActionType.CLUSTER_CELLS,
+                    ActionType.DIFFERENTIAL_EXPRESSION,
+                    ActionType.INTEGRATE_BATCHES,
+                }
+                if not (allow_rerun and rerunable):
+                    skip_reason = (
+                        f"blocked repeat of completed step {action.action_type.value}"
+                    )
             elif action.action_type in failed_types:
                 if should_block_failed_reattempt(
                     obs.pipeline_history, action.action_type
@@ -905,24 +1036,8 @@ def main():
                     )
 
             if skip_reason:
-                if is_last_step:
-                    log(f"\n  [!] {skip_reason} on final step — forcing synthesize_conclusion.")
-                    action = ExperimentAction(
-                        action_type=ActionType.SYNTHESIZE_CONCLUSION,
-                        justification="forced terminal conclusion",
-                        confidence=0.5,
-                    )
-                else:
-                    log(f"\n  [!] {skip_reason}, skipping step.")
-                    continue
-
-            if is_last_step and action.action_type != ActionType.SYNTHESIZE_CONCLUSION:
-                log(f"\n  [!] Final step — overriding {action.action_type.value} with synthesize_conclusion.")
-                action = ExperimentAction(
-                    action_type=ActionType.SYNTHESIZE_CONCLUSION,
-                    justification="forced terminal conclusion",
-                    confidence=action.confidence,
-                )
+                log(f"\n  [!] {skip_reason}, skipping step.")
+                continue
 
             action = ensure_conclusion_claims(obs, action)
 
@@ -942,6 +1057,12 @@ def main():
                 )
 
             obs = env.step(action)
+
+            if obs.latest_output and obs.latest_output.success and action.justification and action.action_type in ANALYSIS_STEPS:
+                running_hypotheses = (
+                    running_hypotheses
+                    + [f"[Step {step + 1} / {action.action_type.value}] {action.justification[:200]}"]
+                )[-5:]
 
             if obs.latest_output:
                 lo = obs.latest_output

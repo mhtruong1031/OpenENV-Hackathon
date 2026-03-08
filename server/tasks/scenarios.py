@@ -115,6 +115,7 @@ SCENARIO_LIBRARY: List[Scenario] = [
                 "TGF-beta-driven fibrosis",
                 "inflammatory macrophage infiltration",
             ],
+            confounders={"batch": 0.3},
             n_true_cells=12_000,
         ),
         technical=TechnicalState(
@@ -240,6 +241,7 @@ SCENARIO_LIBRARY: List[Scenario] = [
                 "GATA1-driven erythroid commitment",
                 "PU.1/CEBPA antagonism at myeloid branch point",
             ],
+            confounders={},
             n_true_cells=15_000,
         ),
         technical=TechnicalState(dropout_rate=0.12, doublet_rate=0.06),
@@ -324,6 +326,7 @@ SCENARIO_LIBRARY: List[Scenario] = [
                 "JAK-STAT pathway inhibition reduces Th1/Th17 activation",
                 "Compensatory Treg expansion under JAK inhibition",
             ],
+            confounders={"batch": 0.7, "ambient_rna": 0.5},
             n_true_cells=18_000,
         ),
         technical=TechnicalState(
@@ -443,6 +446,7 @@ SCENARIO_LIBRARY: List[Scenario] = [
                 "SPP1+ macrophage-driven fibroblast activation",
                 "Integrin-mediated SPP1 signalling in fibrosis",
             ],
+            confounders={"batch": 0.5},
             n_true_cells=14_000,
         ),
         technical=TechnicalState(
@@ -450,6 +454,203 @@ SCENARIO_LIBRARY: List[Scenario] = [
             dropout_rate=0.09,
             sample_quality=0.85,
         ),
+    ),
+
+    # ── 5. Tumor microenvironment (confounders) ─────────────────────────
+    Scenario(
+        name="tumor_microenvironment_confounders",
+        difficulty="hard",
+        tags=["confounders", "tumor", "scRNA-seq"],
+        task=TaskSpec(
+            problem_statement=(
+                "Identify tumor-associated macrophage (TAM) states and "
+                "control for batch and donor confounders in tumor microenvironment."
+            ),
+            modality="scRNA-seq",
+            organism="human",
+            tissue="tumor",
+            conditions=["tumor", "adjacent_normal"],
+            budget_limit=110_000.0,
+            time_limit_days=160.0,
+            success_criteria=[
+                "Identify tumor-associated macrophage states",
+                "Control for batch and donor confounders",
+            ],
+        ),
+        biology=LatentBiologicalState(
+            cell_populations=[
+                CellPopulation(
+                    name="TAM",
+                    proportion=0.22,
+                    marker_genes=["CD68", "MRC1", "CD163", "IL10"],
+                    state="M2_like",
+                    condition_response={"tumor": 1.8},
+                ),
+                CellPopulation(
+                    name="T_cell",
+                    proportion=0.20,
+                    marker_genes=["CD3D", "CD8A", "GZMB", "PDCD1"],
+                    state="exhausted",
+                    condition_response={"tumor": 1.2},
+                ),
+                CellPopulation(
+                    name="fibroblast",
+                    proportion=0.18,
+                    marker_genes=["FAP", "ACTA2", "COL1A1", "PDPN"],
+                    state="CAF",
+                ),
+                CellPopulation(
+                    name="malignant",
+                    proportion=0.25,
+                    marker_genes=["EPCAM", "KRT18", "MKI67"],
+                    state="tumor",
+                ),
+                CellPopulation(
+                    name="endothelial",
+                    proportion=0.15,
+                    marker_genes=["PECAM1", "VWF", "CDH5"],
+                    state="quiescent",
+                ),
+            ],
+            true_de_genes={
+                "tumor_vs_adjacent_normal": {
+                    "MRC1": 1.5, "CD163": 1.8, "IL10": 1.2,
+                    "FAP": 2.0, "COL1A1": 1.6, "EPCAM": 2.2,
+                },
+            },
+            true_pathways={
+                "immune_suppression": 0.75,
+                "extracellular_matrix_organisation": 0.8,
+                "angiogenesis": 0.65,
+            },
+            true_markers=["MRC1", "CD163", "FAP", "EPCAM"],
+            causal_mechanisms=[
+                "TAM-driven immune suppression",
+                "CAF–tumor crosstalk",
+            ],
+            confounders={"batch": 0.85, "donor_age": 0.5, "composition": 0.6},
+            n_true_cells=14_000,
+        ),
+        technical=TechnicalState(
+            batch_effects={"batch_1": 0.20, "batch_2": 0.18},
+            doublet_rate=0.07,
+            dropout_rate=0.11,
+        ),
+        hidden_failure_conditions=[
+            "Composition-driven differential expression can mimic true DE.",
+        ],
+    ),
+
+    # ── 6. Cross-cohort biomarker ──────────────────────────────────────
+    Scenario(
+        name="cross_cohort_biomarker",
+        difficulty="hard",
+        tags=["confounders", "multicohort", "biomarker"],
+        task=TaskSpec(
+            problem_statement=(
+                "Validate a candidate biomarker across two cohorts with "
+                "different sequencing platforms."
+            ),
+            modality="scRNA-seq",
+            organism="human",
+            tissue="blood",
+            conditions=["cohort_A", "cohort_B"],
+            budget_limit=95_000.0,
+            time_limit_days=140.0,
+            success_criteria=[
+                "Validate marker in both cohorts",
+            ],
+        ),
+        biology=LatentBiologicalState(
+            cell_populations=[
+                CellPopulation(
+                    name="population_1",
+                    proportion=0.55,
+                    marker_genes=["MARKER_A", "MARKER_B", "MARKER_C"],
+                    state="baseline",
+                ),
+                CellPopulation(
+                    name="population_2",
+                    proportion=0.45,
+                    marker_genes=["MARKER_A", "MARKER_B", "MARKER_C"],
+                    state="baseline",
+                ),
+            ],
+            true_markers=["MARKER_A", "MARKER_B", "MARKER_C"],
+            causal_mechanisms=["shared_marker_expression"],
+            confounders={"batch": 0.8, "platform": 0.7},
+            n_true_cells=12_000,
+        ),
+        technical=TechnicalState(
+            batch_effects={"batch_1": 0.25, "batch_2": 0.22},
+            dropout_rate=0.10,
+        ),
+        hidden_failure_conditions=[
+            "Platform and batch effects can obscure true marker signal.",
+        ],
+    ),
+
+    # ── 7. Rare population under doublets ───────────────────────────────
+    Scenario(
+        name="rare_population_doublets",
+        difficulty="hard",
+        tags=["confounders", "rare_cell", "scRNA-seq"],
+        task=TaskSpec(
+            problem_statement=(
+                "Identify and validate a rare cell population while "
+                "addressing QC and confounder assessment."
+            ),
+            modality="scRNA-seq",
+            organism="human",
+            tissue="bone_marrow",
+            conditions=["steady_state"],
+            budget_limit=100_000.0,
+            time_limit_days=150.0,
+            success_criteria=[
+                "Identify and validate the rare population",
+                "Perform adequate QC and confounder assessment",
+            ],
+        ),
+        biology=LatentBiologicalState(
+            cell_populations=[
+                CellPopulation(
+                    name="rare_progenitor",
+                    proportion=0.03,
+                    marker_genes=["RARE1", "RARE2", "RARE3"],
+                    state="rare",
+                ),
+                CellPopulation(
+                    name="abundant_1",
+                    proportion=0.35,
+                    marker_genes=["AB1", "AB2", "AB3"],
+                    state="abundant",
+                ),
+                CellPopulation(
+                    name="abundant_2",
+                    proportion=0.32,
+                    marker_genes=["AB4", "AB5", "AB6"],
+                    state="abundant",
+                ),
+                CellPopulation(
+                    name="abundant_3",
+                    proportion=0.30,
+                    marker_genes=["AB7", "AB8", "AB9"],
+                    state="abundant",
+                ),
+            ],
+            true_markers=["RARE1", "RARE2", "RARE3"],
+            causal_mechanisms=["rare_progenitor_fate"],
+            confounders={"doublet": 0.7, "ambient_rna": 0.5},
+            n_true_cells=15_000,
+        ),
+        technical=TechnicalState(
+            doublet_rate=0.12,
+            ambient_rna_fraction=0.08,
+            dropout_rate=0.10,
+        ),
+        hidden_failure_conditions=[
+            "Doublets and ambient RNA can obscure or mimic rare population signal.",
+        ],
     ),
 ]
 

@@ -31,6 +31,7 @@ class ActionType(str, Enum):
     NORMALIZE_DATA = "normalize_data"
     INTEGRATE_BATCHES = "integrate_batches"
     CLUSTER_CELLS = "cluster_cells"
+    ANNOTATE_CELL_TYPES = "annotate_cell_types"
     DIFFERENTIAL_EXPRESSION = "differential_expression"
     TRAJECTORY_ANALYSIS = "trajectory_analysis"
     PATHWAY_ENRICHMENT = "pathway_enrichment"
@@ -40,6 +41,9 @@ class ActionType(str, Enum):
     DESIGN_FOLLOWUP = "design_followup_experiment"
     REQUEST_SUBAGENT_REVIEW = "request_subagent_review"
     SYNTHESIZE_CONCLUSION = "synthesize_conclusion"
+    ASSESS_CONFOUNDERS = "assess_confounders"
+    STRATIFY_BY_COVARIATE = "stratify_by_covariate"
+    RUN_SENSITIVITY_ANALYSIS = "run_sensitivity_analysis"
 
 
 WET_LAB_ACTIONS = frozenset({
@@ -59,11 +63,21 @@ COMPUTATIONAL_ACTIONS = frozenset({
     ActionType.NORMALIZE_DATA,
     ActionType.INTEGRATE_BATCHES,
     ActionType.CLUSTER_CELLS,
+    ActionType.ANNOTATE_CELL_TYPES,
     ActionType.DIFFERENTIAL_EXPRESSION,
     ActionType.TRAJECTORY_ANALYSIS,
     ActionType.PATHWAY_ENRICHMENT,
     ActionType.REGULATORY_NETWORK_INFERENCE,
     ActionType.MARKER_SELECTION,
+    ActionType.ASSESS_CONFOUNDERS,
+    ActionType.STRATIFY_BY_COVARIATE,
+    ActionType.RUN_SENSITIVITY_ANALYSIS,
+})
+
+INFERENCE_ACTIONS = frozenset({
+    ActionType.ASSESS_CONFOUNDERS,
+    ActionType.STRATIFY_BY_COVARIATE,
+    ActionType.RUN_SENSITIVITY_ANALYSIS,
 })
 
 META_ACTIONS = frozenset({
@@ -98,6 +112,8 @@ class ToolCategory(str, Enum):
     VISUALIZATION = "visualization"
     QUALITY_CONTROL = "quality_control"
     PERTURBATION_ANALYSIS = "perturbation_analysis"
+    STATISTICAL_INFERENCE = "statistical_inference"
+    KNOWLEDGE_BASE = "knowledge_base"
 
 
 class ToolSpec(BaseModel):
@@ -581,6 +597,54 @@ TOOL_REGISTRY: Dict[str, ToolSpec] = {
         input_types=["simulation_params"],
         output_types=["simulated_count_matrix"],
     ),
+    # ── Variant calling ──
+    "GATK": ToolSpec(
+        name="GATK",
+        category=ToolCategory.VARIANT_CALLING,
+        modalities=["genomics"],
+        description="Genome Analysis Toolkit for variant discovery and genotyping",
+        input_types=["bam", "reference_fasta"],
+        output_types=["vcf", "gvcf"],
+        typical_runtime_hours=8.0,
+    ),
+    "bcftools": ToolSpec(
+        name="bcftools",
+        category=ToolCategory.VARIANT_CALLING,
+        modalities=["genomics"],
+        description="Variant calling and manipulation for VCF/BCF files",
+        input_types=["bam", "vcf"],
+        output_types=["vcf", "bcf"],
+        typical_runtime_hours=2.0,
+    ),
+    # ── Knowledge base ──
+    "Ensembl": ToolSpec(
+        name="Ensembl",
+        category=ToolCategory.KNOWLEDGE_BASE,
+        modalities=["bulk_rna_seq", "scRNA-seq", "genomics"],
+        description="Reference genome and annotation lookup",
+        input_types=["gene_id", "transcript_id"],
+        output_types=["annotation", "sequence"],
+        typical_cost_usd=0,
+    ),
+    "MSigDB": ToolSpec(
+        name="MSigDB",
+        category=ToolCategory.KNOWLEDGE_BASE,
+        modalities=["bulk_rna_seq", "scRNA-seq"],
+        description="Molecular signatures and gene set collections for enrichment",
+        input_types=["gene_list"],
+        output_types=["gene_set_metadata"],
+        typical_cost_usd=0,
+    ),
+    # ── Statistical inference ──
+    "mixed_models": ToolSpec(
+        name="mixed_models",
+        category=ToolCategory.STATISTICAL_INFERENCE,
+        modalities=["bulk_rna_seq", "scRNA-seq"],
+        description="Mixed-effects models for confounder adjustment and repeated measures",
+        input_types=["count_matrix", "metadata"],
+        output_types=["model_result", "adjusted_estimates"],
+        typical_runtime_hours=0.5,
+    ),
 }
 
 
@@ -675,7 +739,7 @@ MODALITY_REGISTRY: Dict[str, ModalitySpec] = {
         resolution="bulk",
         typical_cells="N/A",
         typical_cost_per_sample_usd=500.0,
-        compatible_tools=["DESeq2", "edgeR", "GSEA", "clusterProfiler"],
+        compatible_tools=["DESeq2", "edgeR", "GSEA", "clusterProfiler", "mixed_models", "MSigDB", "Ensembl"],
         description="Standard bulk RNA sequencing",
     ),
     "scMultiome": ModalitySpec(
@@ -1102,6 +1166,9 @@ class SubagentType(str, Enum):
     TOOL_EXECUTOR = "tool_executor"
     RETROSPECTIVE_CRITIC = "retrospective_critic"
     REPORT_SYNTHESIZER = "report_synthesizer"
+    STATISTICAL_INFERENCE_AGENT = "statistical_inference_agent"
+    STUDY_DESIGN_AGENT = "study_design_agent"
+    KNOWLEDGEBASE_RETRIEVER = "knowledgebase_retriever"
 
 
 # ── Action schema ───────────────────────────────────────────────────────────
@@ -1184,6 +1251,7 @@ class OutputType(str, Enum):
     COUNT_MATRIX_SUMMARY = "count_matrix_summary"
     EMBEDDING_SUMMARY = "embedding_summary"
     CLUSTER_RESULT = "cluster_result"
+    ANNOTATION_RESULT = "annotation_result"
     DE_RESULT = "de_result"
     PATHWAY_RESULT = "pathway_result"
     TRAJECTORY_RESULT = "trajectory_result"
@@ -1200,6 +1268,7 @@ class OutputType(str, Enum):
     FAILURE_REPORT = "failure_report"
     SUBAGENT_REPORT = "subagent_report"
     CONCLUSION = "conclusion"
+    ANALYSIS_RESULT = "analysis_result"
 
 
 class IntermediateOutput(BaseModel):
@@ -1290,6 +1359,14 @@ class TaskSpec(BaseModel):
     dataset_metadata: Dict[str, Any] = Field(default_factory=dict)
     paper_references: List[PaperReference] = Field(default_factory=list)
     expected_findings: List[ExpectedFinding] = Field(default_factory=list)
+    tags: List[str] = Field(
+        default_factory=list,
+        description="Scenario tags (e.g. confounders, multicohort) for agent context.",
+    )
+    difficulty: str = Field(
+        default="medium",
+        description="Scenario difficulty: easy, medium, or hard.",
+    )
 
 
 class ConclusionClaim(BaseModel):
@@ -1396,6 +1473,11 @@ AGENT_ACTION_GUIDANCE: Dict[ActionType, str] = {
         "Requires normalized data and identifies cell populations or states "
         "for downstream interpretation."
     ),
+    ActionType.ANNOTATE_CELL_TYPES: (
+        "Requires clustering. Assigns biological identities to clusters using "
+        "marker expression or reference; improves interpretability of DE and "
+        "conclusions."
+    ),
     ActionType.DIFFERENTIAL_EXPRESSION: (
         "Requires normalized data and is the main route to candidate genes "
         "for pathway analysis and marker selection."
@@ -1431,6 +1513,18 @@ AGENT_ACTION_GUIDANCE: Dict[ActionType, str] = {
     ActionType.SYNTHESIZE_CONCLUSION: (
         "Use once the evidence is sufficient. Do not spend budget on redundant "
         "steps just because more actions are possible."
+    ),
+    ActionType.ASSESS_CONFOUNDERS: (
+        "Check for batch, composition, or covariate confounding before strong "
+        "conclusions; requires normalized data."
+    ),
+    ActionType.STRATIFY_BY_COVARIATE: (
+        "Run analysis stratified by a covariate (e.g. batch, sex) to test "
+        "robustness; requires prior DE or clustering."
+    ),
+    ActionType.RUN_SENSITIVITY_ANALYSIS: (
+        "Re-run a prior step under different parameters or adjustments and "
+        "compare; requires the underlying analysis already done."
     ),
 }
 
@@ -1496,6 +1590,10 @@ ACTION_PARAMETER_GUIDANCE: Dict[ActionType, List[str]] = {
         "n_neighbors (int, optional): neighborhood graph size.",
         "embedding (str, optional): representation such as pca/scvi.",
     ],
+    ActionType.ANNOTATE_CELL_TYPES: [
+        "method (str, optional): e.g. SingleR, celltypist.",
+        "reference (str, optional): reference atlas name.",
+    ],
     ActionType.DIFFERENTIAL_EXPRESSION: [
         "comparison (str, required): contrast label (for example 'disease_vs_control').",
         "group_by (str, optional): metadata key defining groups/clusters.",
@@ -1540,6 +1638,18 @@ ACTION_PARAMETER_GUIDANCE: Dict[ActionType, List[str]] = {
         "claims (list[dict], required): structured claims with markers, mechanisms, pathways, and confidence.",
         "evidence_steps (list[int], optional): supporting pipeline step indices.",
         "open_questions (list[str], optional): unresolved uncertainties.",
+    ],
+    ActionType.ASSESS_CONFOUNDERS: [
+        "candidate_confounders (list[str], optional): variables to test (e.g. batch, sex).",
+        "method (str, optional): assessment method (e.g. regression, PCA).",
+    ],
+    ActionType.STRATIFY_BY_COVARIATE: [
+        "covariate (str, required): metadata key to stratify by (e.g. batch, sex).",
+        "analysis_type (str, optional): type of stratified analysis (e.g. DE, clustering).",
+    ],
+    ActionType.RUN_SENSITIVITY_ANALYSIS: [
+        "baseline_step_ref (str, optional): reference to the prior step to vary.",
+        "variations (list[dict], optional): parameter or adjustment variants to compare.",
     ],
 }
 
@@ -1621,6 +1731,12 @@ _TOOL_CATEGORY_AGENT_NOTES: Dict[ToolCategory, str] = {
     ToolCategory.SPATIAL: (
         "Only useful when the modality includes spatial coordinates or tissue "
         "context."
+    ),
+    ToolCategory.STATISTICAL_INFERENCE: (
+        "Use for confounder assessment, mixed models, and sensitivity analyses."
+    ),
+    ToolCategory.KNOWLEDGE_BASE: (
+        "Use for reference lookups, gene set metadata, and annotation without compute."
     ),
 }
 
@@ -1733,6 +1849,14 @@ def build_agent_observation_context(
 ) -> str:
     """Summarize modality-specific tool and assay context for the agent."""
     sections: List[str] = []
+
+    if obs.task.tags or obs.task.difficulty != "medium":
+        parts = []
+        if obs.task.tags:
+            parts.append(f"Task tags: {', '.join(obs.task.tags)}")
+        if obs.task.difficulty != "medium":
+            parts.append(f"Difficulty: {obs.task.difficulty}")
+        sections.append(". ".join(parts) + ".")
 
     modality_spec = MODALITY_REGISTRY.get(obs.task.modality)
     if modality_spec is not None:

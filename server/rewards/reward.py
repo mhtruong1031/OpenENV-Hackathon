@@ -55,6 +55,7 @@ class RewardBreakdown:
     penalty: float = 0.0
     shaping: float = 0.0
     terminal: float = 0.0
+    confounder_step: float = 0.0
     components: Dict[str, float] = field(default_factory=dict)
 
     @property
@@ -68,6 +69,7 @@ class RewardBreakdown:
             + self.penalty
             + self.shaping
             + self.terminal
+            + self.confounder_step
         )
 
     def to_dict(self) -> Dict[str, float]:
@@ -80,6 +82,7 @@ class RewardBreakdown:
             "penalty": self.penalty,
             "shaping": self.shaping,
             "terminal": self.terminal,
+            "confounder_step": self.confounder_step,
             "total": self.total,
         }
         d.update(self.components)
@@ -182,6 +185,31 @@ class RewardComputer:
         phi_next = self._potential(next_state)
         rb.shaping = phi_next - phi_prev
 
+        # confounder step bonus: small reward for assessing confounders when valid
+        if (
+            action.action_type == ActionType.ASSESS_CONFOUNDERS
+            and output.success is not False
+        ):
+            rb.confounder_step = 0.1
+
+        # justification grounding: bonus when justification cites discovered evidence
+        if (action.justification or "").strip() and output.success:
+            de_genes = getattr(prev_state, "discovered_de_genes", []) or []
+            clusters = getattr(prev_state, "discovered_clusters", []) or []
+            known_tokens = {
+                str(x).strip().lower()
+                for x in (de_genes + clusters)
+                if x and str(x).strip()
+            }
+            justification_lower = (action.justification or "").lower()
+            if known_tokens and any(
+                tok in justification_lower for tok in known_tokens
+            ):
+                rb.components["justification_grounding"] = 0.05
+                rb.novelty += 0.05
+            else:
+                rb.components["justification_grounding"] = 0.0
+
         return rb
 
     # ── terminal reward ─────────────────────────────────────────────────
@@ -235,6 +263,41 @@ class RewardComputer:
         rb.components["discovery_alignment"] = discovery_alignment
         rb.components["discovery_error_penalty"] = discovery_error_penalty
 
+        # confounder awareness: bonus if assessed when present, penalty if not
+        confounder_awareness = 0.0
+        if state.biology.confounders:
+            if state.progress.confounders_assessed:
+                confounder_awareness = 0.5
+            else:
+                confounder_awareness = -0.2
+        rb.components["confounder_awareness"] = confounder_awareness
+
+        # insufficient evidence bonus: reward not overclaiming when confounders present
+        insufficient_evidence_bonus = 0.0
+        if state.biology.confounders and conclusions:
+            has_insufficient = any(
+                c.claim_type == "insufficient_evidence" or c.confidence < 0.4
+                for c in conclusions
+            )
+            if has_insufficient:
+                insufficient_evidence_bonus = 0.3
+        rb.components["insufficient_evidence_bonus"] = insufficient_evidence_bonus
+
+        # evidence_citation_bonus: reward conclusions that cite evidence steps
+        cited_frac = sum(
+            1
+            for c in conclusions
+            if getattr(c, "evidence_steps", None) and len(c.evidence_steps) > 0
+        ) / max(len(conclusions), 1)
+        evidence_citation_bonus = 0.2 * cited_frac
+        rb.components["evidence_citation_bonus"] = evidence_citation_bonus
+
+        # no_conclusion_penalty: penalise if agent never reached a conclusion
+        no_conclusion_penalty = 0.0
+        if not state.progress.conclusion_reached:
+            no_conclusion_penalty = -1.5
+        rb.components["no_conclusion_penalty"] = no_conclusion_penalty
+
         eff_bonus = (budget_eff + time_eff) / 2.0 if completeness >= 0.3 else 0.0
         rb.terminal = (
             3.0 * completeness
@@ -243,6 +306,10 @@ class RewardComputer:
             + overconf
             + extra_missing_penalty
             + discovery_error_penalty
+            + confounder_awareness
+            + insufficient_evidence_bonus
+            + evidence_citation_bonus
+            + no_conclusion_penalty
         )
         return rb
 
@@ -280,6 +347,11 @@ class RewardComputer:
         if at in META_ACTIONS and not has_evidence:
             return -1.0
 
+        if at == ActionType.CLUSTER_CELLS and p.cells_clustered and p.batches_integrated:
+            return 0.8
+        if at == ActionType.DIFFERENTIAL_EXPRESSION and p.de_performed and getattr(p, "cell_types_annotated", False):
+            return 0.7
+
         return 0.3
 
     def _potential(self, s: FullLatentState) -> float:
@@ -305,6 +377,8 @@ class RewardComputer:
             p.markers_validated,
             p.conclusion_reached,
         ]
+        if s.biology.confounders:
+            milestones.append(p.confounders_assessed)
         return sum(milestones) / len(milestones)
 
     def _completeness(self, s: FullLatentState) -> float:

@@ -93,6 +93,9 @@ class RuleEngine:
             ActionType.CLUSTER_CELLS: [
                 ("data_normalized", "Cannot cluster before normalisation"),
             ],
+            ActionType.ANNOTATE_CELL_TYPES: [
+                ("cells_clustered", "Cannot annotate cell types before clustering"),
+            ],
             ActionType.DIFFERENTIAL_EXPRESSION: [
                 ("data_normalized", "Cannot run DE before normalisation"),
             ],
@@ -122,6 +125,15 @@ class RuleEngine:
             ],
             ActionType.SYNTHESIZE_CONCLUSION: [
                 ("data_normalized", "Cannot synthesize conclusions before data normalization"),
+            ],
+            ActionType.ASSESS_CONFOUNDERS: [
+                ("data_normalized", "Cannot assess confounders before data normalization"),
+            ],
+            ActionType.STRATIFY_BY_COVARIATE: [
+                ("de_performed", "Cannot stratify without prior DE or clustering"),
+            ],
+            ActionType.RUN_SENSITIVITY_ANALYSIS: [
+                ("de_performed", "Cannot run sensitivity without prior analysis"),
             ],
         }
 
@@ -181,6 +193,7 @@ class RuleEngine:
             ActionType.FILTER_DATA: "data_filtered",
             ActionType.NORMALIZE_DATA: "data_normalized",
             ActionType.CLUSTER_CELLS: "cells_clustered",
+            ActionType.ANNOTATE_CELL_TYPES: "cell_types_annotated",
             ActionType.DIFFERENTIAL_EXPRESSION: "de_performed",
             ActionType.TRAJECTORY_ANALYSIS: "trajectories_inferred",
             ActionType.PATHWAY_ENRICHMENT: "pathways_analyzed",
@@ -208,7 +221,17 @@ class RuleEngine:
         action: ExperimentAction,
         s: FullLatentState,
     ) -> bool:
-        if action.action_type not in {
+        at = action.action_type
+        # DE / cluster / integrate: allow up to 2 reruns when allow_rerun is set
+        if at in {
+            ActionType.DIFFERENTIAL_EXPRESSION,
+            ActionType.CLUSTER_CELLS,
+            ActionType.INTEGRATE_BATCHES,
+        }:
+            if bool(action.parameters.get("allow_rerun")) and s.progress.analysis_rerun_counts.get(at.value, 0) < 2:
+                return True
+            return False
+        if at not in {
             ActionType.MARKER_SELECTION,
             ActionType.PATHWAY_ENRICHMENT,
         }:
@@ -269,6 +292,12 @@ class RuleEngine:
                     rule_id="premature_conclusion",
                     severity=Severity.HARD,
                     message="Cannot synthesise conclusion without substantive analysis",
+                ))
+            if s.progress.cells_clustered and not s.progress.cell_types_annotated:
+                vs.append(RuleViolation(
+                    rule_id="conclusion_without_annotation",
+                    severity=Severity.SOFT,
+                    message="Cluster identities not annotated; conclusions may lack biological context",
                 ))
 
             claims = action.parameters.get("claims", [])

@@ -82,6 +82,7 @@ class ExperimentProgress(BaseModel):
     data_normalized: bool = False
     batches_integrated: bool = False
     cells_clustered: bool = False
+    cell_types_annotated: bool = False
     de_performed: bool = False
     trajectories_inferred: bool = False
     pathways_analyzed: bool = False
@@ -91,12 +92,19 @@ class ExperimentProgress(BaseModel):
     followup_designed: bool = False
     subagent_review_requested: bool = False
     conclusion_reached: bool = False
+    confounders_assessed: bool = False
+
+    analysis_rerun_counts: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Rerun count per action type (e.g. differential_expression, cluster_cells, integrate_batches)",
+    )
 
     n_cells_sequenced: Optional[int] = None
     n_cells_after_filter: Optional[int] = None
     n_clusters_found: Optional[int] = None
     n_de_genes_found: Optional[int] = None
     n_markers_found: Optional[int] = None
+    n_cohort_per_group: Optional[int] = None
 
 
 class ResourceState(BaseModel):
@@ -154,5 +162,6 @@ class FullLatentState(BaseModel):
     # Transient fields for passing sampled values from the transition engine
     # to the output generator within a single step (not serialized).
     last_retain_frac: Optional[float] = Field(None, exclude=True)
+    last_de_noise_level: Optional[float] = Field(None, exclude=True)
     last_n_clusters: Optional[int] = Field(None, exclude=True)
     last_perturbation_efficiency: Optional[float] = Field(None, exclude=True)

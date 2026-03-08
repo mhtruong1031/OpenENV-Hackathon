@@ -37,6 +37,7 @@ _BASE_ACTION_COSTS: Dict[ActionType, Tuple[float, float]] = {
     ActionType.NORMALIZE_DATA:               (   50,  0.25),
     ActionType.INTEGRATE_BATCHES:            (  100,  0.5),
     ActionType.CLUSTER_CELLS:                (  100,  0.5),
+    ActionType.ANNOTATE_CELL_TYPES:           (   50,  0.25),
     ActionType.DIFFERENTIAL_EXPRESSION:      (  100,  0.5),
     ActionType.TRAJECTORY_ANALYSIS:          (  200,  1.0),
     ActionType.PATHWAY_ENRICHMENT:           (  100,  0.5),
@@ -46,6 +47,9 @@ _BASE_ACTION_COSTS: Dict[ActionType, Tuple[float, float]] = {
     ActionType.DESIGN_FOLLOWUP:              (  100,  0.5),
     ActionType.REQUEST_SUBAGENT_REVIEW:      (   50,  0.25),
     ActionType.SYNTHESIZE_CONCLUSION:        (    0,  0.5),
+    ActionType.ASSESS_CONFOUNDERS:           (  150,  0.5),
+    ActionType.STRATIFY_BY_COVARIATE:        (  100,  0.5),
+    ActionType.RUN_SENSITIVITY_ANALYSIS:     (  200,  1.0),
 }
 
 # Kept as public alias so existing imports (e.g. hackathon_environment) still work.
@@ -165,9 +169,10 @@ class TransitionEngine:
         if action.action_type in {
             ActionType.RUN_QC, ActionType.FILTER_DATA,
             ActionType.NORMALIZE_DATA, ActionType.INTEGRATE_BATCHES,
-            ActionType.CLUSTER_CELLS, ActionType.DIFFERENTIAL_EXPRESSION,
-            ActionType.TRAJECTORY_ANALYSIS, ActionType.PATHWAY_ENRICHMENT,
-            ActionType.REGULATORY_NETWORK_INFERENCE, ActionType.MARKER_SELECTION,
+            ActionType.CLUSTER_CELLS, ActionType.ANNOTATE_CELL_TYPES,
+            ActionType.DIFFERENTIAL_EXPRESSION, ActionType.TRAJECTORY_ANALYSIS,
+            ActionType.PATHWAY_ENRICHMENT, ActionType.REGULATORY_NETWORK_INFERENCE,
+            ActionType.MARKER_SELECTION,
         }:
             s.resources.compute_hours_used += time_cost * 8
 
@@ -189,6 +194,7 @@ class TransitionEngine:
             ActionType.NORMALIZE_DATA: "data_normalized",
             ActionType.INTEGRATE_BATCHES: "batches_integrated",
             ActionType.CLUSTER_CELLS: "cells_clustered",
+            ActionType.ANNOTATE_CELL_TYPES: "cell_types_annotated",
             ActionType.DIFFERENTIAL_EXPRESSION: "de_performed",
             ActionType.TRAJECTORY_ANALYSIS: "trajectories_inferred",
             ActionType.PATHWAY_ENRICHMENT: "pathways_analyzed",
@@ -198,14 +204,30 @@ class TransitionEngine:
             ActionType.DESIGN_FOLLOWUP: "followup_designed",
             ActionType.REQUEST_SUBAGENT_REVIEW: "subagent_review_requested",
             ActionType.SYNTHESIZE_CONCLUSION: "conclusion_reached",
+            ActionType.ASSESS_CONFOUNDERS: "confounders_assessed",
         }
         flag = _MAP.get(at)
+        # Rerun: increment count before applying progress (only when already done + allow_rerun)
+        _RERUN_ACTION_TYPES = {
+            ActionType.DIFFERENTIAL_EXPRESSION,
+            ActionType.CLUSTER_CELLS,
+            ActionType.INTEGRATE_BATCHES,
+        }
+        if at in _RERUN_ACTION_TYPES and action.parameters.get("allow_rerun"):
+            if flag and getattr(p, flag, False):
+                key = at.value
+                p.analysis_rerun_counts[key] = p.analysis_rerun_counts.get(key, 0) + 1
         if flag:
             setattr(p, flag, True)
+        if at == ActionType.ASSESS_CONFOUNDERS:
+            p.confounders_assessed = True
 
         if at == ActionType.COLLECT_SAMPLE:
             n = action.parameters.get("n_samples", 6)
             s.resources.samples_available += n
+
+        if at == ActionType.SELECT_COHORT:
+            p.n_cohort_per_group = action.parameters.get("target_n_per_group", 4)
 
         if at == ActionType.SEQUENCE_CELLS:
             s.resources.sequencing_lanes_used += 1
@@ -257,6 +279,7 @@ class TransitionEngine:
             top = output.data.get("top_genes", [])
             s.discovered_de_genes = [g["gene"] for g in top[:20]]
             s.progress.n_de_genes_found = output.data.get("n_significant", 0)
+            s.last_de_noise_level = output.uncertainty
 
         if action.action_type == ActionType.CLUSTER_CELLS:
             s.discovered_clusters = output.data.get("cluster_names", [])

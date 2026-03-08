@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+import numpy as np
+
 from models import (
     ActionType,
     ExperimentAction,
@@ -21,6 +23,32 @@ _NOISE_TFS: List[str] = [
     "NR3C1", "KLF4", "EGR1", "IRF1", "FOSL2", "JUN", "FOS", "ATF3",
     "NFKB1", "RELA", "SP1", "MYC", "MAX", "E2F1", "CTCF", "YY1",
     "TP53", "STAT5A", "SMAD3", "TCF7L2", "NFE2L2", "HIF1A", "CREB1",
+]
+
+# Plausible generic pathway names for realistic false-positive enrichment hits
+# (excluded from sampling when they overlap true_pathways).
+_BACKGROUND_PATHWAYS: List[str] = [
+    "Ribosome", "Oxidative_phosphorylation", "Cell_cycle", "p53_signaling_pathway",
+    "MAPK_signaling", "PI3K_Akt_signaling", "Glycolysis", "Fatty_acid_metabolism",
+    "Citrate_cycle_TCA_cycle", "Pyruvate_metabolism", "Amino_sugar_metabolism",
+    "Pentose_phosphate_pathway", "Starch_sucrose_metabolism", "Galactose_metabolism",
+    "Fructose_mannose_metabolism", "Purine_metabolism", "Pyrimidine_metabolism",
+    "Spliceosome", "Proteasome", "RNA_polymerase", "Basal_transcription_factors",
+    "DNA_replication", "Mismatch_repair", "Base_excision_repair", "Nucleotide_excision_repair",
+    "Homologous_recombination", "Non_homologous_end_joining", "Apoptosis",
+    "NF_kappa_B_signaling", "TNF_signaling", "TGF_beta_signaling", "Wnt_signaling",
+    "Hippo_signaling", "Hedgehog_signaling", "Notch_signaling", "JAK_STAT_signaling",
+    "Calcium_signaling", "cAMP_signaling", "mTOR_signaling", "AMPK_signaling",
+    "Hippo_signaling_pathway", "Focal_adhesion", "ECM_receptor_interaction",
+    "Cell_adhesion_molecules", "Tight_junction", "Gap_junction", "Phagosome",
+    "Lysosome", "Endocytosis", "Autophagy", "Ubiquitin_mediated_proteolysis",
+    "Oxidative_stress_response", "Hypoxia_response", "Unfolded_protein_response",
+    "Cholesterol_metabolism", "Steroid_biosynthesis", "Bile_acid_metabolism",
+    "Drug_metabolism_cytochrome_P450", "Chemical_carcinogenesis", "Metabolism_of_xenobiotics",
+    "Immune_response", "Inflammatory_response", "Complement_cascade",
+    "Antigen_processing_presentation", "T_cell_receptor_signaling", "B_cell_receptor_signaling",
+    "Cytoskeleton", "Regulation_of_actin_cytoskeleton",
+    "mRNA_surveillance_pathway", "RNA_degradation", "RNA_transport",
 ]
 
 
@@ -300,6 +328,29 @@ class OutputGenerator:
             artifacts_available=["integrated_embedding"],
         )
 
+    def _annotate_cell_types(
+        self, action: ExperimentAction, state: FullLatentState, step_index: int
+    ) -> IntermediateOutput:
+        cell_populations = state.biology.cell_populations
+        n_clusters = state.progress.n_clusters_found or len(cell_populations) or 1
+        population_names = [p.name for p in cell_populations] if cell_populations else ["unknown"]
+        annotations: Dict[str, str] = {}
+        for i in range(n_clusters):
+            if self.noise.coin_flip(0.15):
+                name = f"unknown_{i}"
+            else:
+                name = str(self.noise.rng.choice(population_names))
+            annotations[f"cluster_{i}"] = name
+        return IntermediateOutput(
+            output_type=OutputType.ANNOTATION_RESULT,
+            step_index=step_index,
+            data={
+                "annotations": annotations,
+                "method": action.method or "SingleR",
+            },
+            artifacts_available=["annotation_table"],
+        )
+
     def _cluster_cells(
         self, action: ExperimentAction, s: FullLatentState, idx: int
     ) -> IntermediateOutput:
@@ -344,6 +395,9 @@ class OutputGenerator:
             + 0.1 * (1.0 - s.technical.sample_quality)
             + 0.5 * batch_noise
         )
+        n_subjects = s.progress.n_cohort_per_group or 4
+        power_factor = min(1.0, n_subjects / 8.0)
+        noise_level = noise_level / max(power_factor, 0.3)
         observed = self.noise.sample_effect_sizes(true_effects, n_cells, noise_level)
 
         fp_genes = self.noise.generate_false_positives(5000, 0.002 + noise_level * 0.01)
@@ -427,14 +481,25 @@ class OutputGenerator:
         for pw, activity in true_pathways.items():
             observed[pw] = activity + float(self.noise.rng.normal(0, noise_level))
 
-        for i in range(self.noise.sample_count(n_fp_mean)):
-            observed[f"FP_PATHWAY_{i}"] = float(self.noise.rng.uniform(0.3, 0.6))
+        true_pathway_set = set(true_pathways)
+        fp_candidates = [p for p in _BACKGROUND_PATHWAYS if p not in true_pathway_set]
+        n_fp = self.noise.sample_count(n_fp_mean)
+        if fp_candidates and n_fp > 0:
+            n_sample = min(n_fp, len(fp_candidates))
+            chosen = self.noise.rng.choice(
+                len(fp_candidates), size=n_sample, replace=False
+            )
+            for idx in chosen:
+                pw_name = fp_candidates[int(idx)]
+                observed[pw_name] = float(self.noise.rng.uniform(0.3, 0.6))
 
         top = sorted(observed.items(), key=lambda kv: kv[1], reverse=True)[:15]
         top_pathway_names = [p for p, _ in top]
-        true_pathway_set = set(true_pathways)
         recovered_true = sum(1 for p in top_pathway_names if p in true_pathway_set)
-        fp_count = sum(1 for p in top_pathway_names if p.startswith("FP_PATHWAY_"))
+        fp_count = sum(
+            1 for p in top_pathway_names
+            if p in _BACKGROUND_PATHWAYS and p not in true_pathway_set
+        )
         n_top = max(len(top), 1)
         fp_fraction = fp_count / n_top
         true_recall = recovered_true / max(len(true_pathway_set), 1)
@@ -632,6 +697,137 @@ class OutputGenerator:
             artifacts_available=["conclusion_report"],
         )
 
+    def _assess_confounders(
+        self, action: ExperimentAction, state: FullLatentState, step_index: int
+    ) -> IntermediateOutput:
+        """Assess confounders from biology.confounders and technical state;
+        sample with small noise so some hidden ones appear in the summary."""
+        confounders = state.biology.confounders or {}
+        tech = state.technical
+        batch_noise = (
+            sum(tech.batch_effects.values()) / max(len(tech.batch_effects), 1)
+            if tech.batch_effects else 0.0
+        )
+        noise_level = 0.05 + 0.1 * tech.dropout_rate + 0.1 * (1.0 - tech.sample_quality) + 0.15 * batch_noise
+        detected: List[Dict[str, Any]] = []
+        for name, strength in confounders.items():
+            if self.noise.coin_flip(0.1):
+                continue
+            noisy_strength = float(self.noise.rng.normal(strength, noise_level))
+            if noisy_strength > 0.05:
+                detected.append({"name": name, "estimated_strength": round(noisy_strength, 3)})
+        if self.noise.coin_flip(0.25):
+            detected.append({
+                "name": "batch",
+                "estimated_strength": round(float(self.noise.rng.uniform(0.1, 0.4)), 3),
+            })
+        if self.noise.coin_flip(0.15):
+            detected.append({
+                "name": "capture_efficiency",
+                "estimated_strength": round(float(self.noise.rng.uniform(0.05, 0.2)), 3),
+            })
+        quality_score = self.noise.quality_degradation(
+            max(0.4, 0.9 - noise_level), [tech.sample_quality]
+        )
+        summary = (
+            f"Confounder assessment: {len(detected)} factor(s) detected. "
+            + (f"Detected: {', '.join(d['name'] for d in detected)}." if detected else "No strong confounders detected.")
+        )
+        recommendations = (
+            "Consider batch correction and covariate stratification."
+            if detected else "Confounding appears limited; proceed with caution on interpretation."
+        )
+        return IntermediateOutput(
+            output_type=OutputType.ANALYSIS_RESULT,
+            step_index=step_index,
+            quality_score=quality_score,
+            summary=summary,
+            data={
+                "detected_confounders": detected,
+                "recommendations": recommendations,
+                "batch_effect_level": round(batch_noise, 4),
+                "dropout_rate": tech.dropout_rate,
+            },
+            artifacts_available=["confounder_report"],
+        )
+
+    def _stratify_by_covariate(
+        self, action: ExperimentAction, state: FullLatentState, step_index: int
+    ) -> IntermediateOutput:
+        """Stratified analysis by the requested covariate."""
+        covariate = action.parameters.get("covariate") or "batch"
+        bio_strength = state.biology.confounders.get(covariate, 0.0)
+        if covariate == "batch" and state.technical.batch_effects:
+            batch_strength = sum(state.technical.batch_effects.values()) / len(
+                state.technical.batch_effects
+            )
+        else:
+            batch_strength = bio_strength
+        combined = (bio_strength + batch_strength) / 2
+        base_effect_varies = combined > 0.4
+        effect_varies = (
+            not base_effect_varies if self.noise.coin_flip(0.1) else base_effect_varies
+        )
+        base_quality = 0.5 + 0.45 * combined
+        quality_score = self.noise.quality_degradation(base_quality, [0.95])
+        if effect_varies:
+            summary = (
+                f"Stratified by {covariate}: effect varies by stratum; "
+                "interpretation should account for subgroup heterogeneity."
+            )
+            data_extra = {"effect_heterogeneity": True, "strata_consistent": False}
+        else:
+            summary = (
+                f"Stratified by {covariate}: results consistent across strata."
+            )
+            data_extra = {"effect_heterogeneity": False, "strata_consistent": True}
+        return IntermediateOutput(
+            output_type=OutputType.ANALYSIS_RESULT,
+            step_index=step_index,
+            quality_score=quality_score,
+            summary=summary,
+            data={
+                "covariate": covariate,
+                "n_strata": self.noise.sample_count(3) + 2,
+                **data_extra,
+            },
+            artifacts_available=["stratified_results"],
+        )
+
+    def _run_sensitivity_analysis(
+        self, action: ExperimentAction, state: FullLatentState, step_index: int
+    ) -> IntermediateOutput:
+        """Sensitivity analysis relative to a baseline step (e.g. DE)."""
+        baseline_step_ref = action.parameters.get("baseline_step_ref") or "de"
+        de_noise = state.last_de_noise_level or 0.2
+        batches_corrected = state.progress.batches_integrated
+        fragility = de_noise * (0.3 if batches_corrected else 1.0)
+        p_robust = max(0.1, min(0.95, 1.0 - fragility))
+        robust = self.noise.coin_flip(p_robust)
+        quality_score = self.noise.quality_degradation(0.8, [0.9])
+        if robust:
+            summary = (
+                "Sensitivity analysis: findings robust to parameter variation."
+            )
+            baseline_vs = {"robust": True, "n_variations_tested": self.noise.sample_count(5) + 3}
+        else:
+            summary = (
+                "Sensitivity analysis: some conclusions sensitive to parameters; "
+                "recommend reporting parameter choices."
+            )
+            baseline_vs = {"robust": False, "n_variations_tested": self.noise.sample_count(5) + 3}
+        return IntermediateOutput(
+            output_type=OutputType.ANALYSIS_RESULT,
+            step_index=step_index,
+            quality_score=quality_score,
+            summary=summary,
+            data={
+                "baseline_step_ref": baseline_step_ref,
+                "baseline_vs_variations": baseline_vs,
+            },
+            artifacts_available=["sensitivity_report"],
+        )
+
     def _default(
         self, action: ExperimentAction, s: FullLatentState, idx: int
     ) -> IntermediateOutput:
@@ -700,6 +896,7 @@ _HANDLERS = {
     ActionType.NORMALIZE_DATA: OutputGenerator._normalize_data,
     ActionType.INTEGRATE_BATCHES: OutputGenerator._integrate_batches,
     ActionType.CLUSTER_CELLS: OutputGenerator._cluster_cells,
+    ActionType.ANNOTATE_CELL_TYPES: OutputGenerator._annotate_cell_types,
     ActionType.DIFFERENTIAL_EXPRESSION: OutputGenerator._differential_expression,
     ActionType.TRAJECTORY_ANALYSIS: OutputGenerator._trajectory_analysis,
     ActionType.PATHWAY_ENRICHMENT: OutputGenerator._pathway_enrichment,
@@ -709,4 +906,7 @@ _HANDLERS = {
     ActionType.DESIGN_FOLLOWUP: OutputGenerator._design_followup,
     ActionType.REQUEST_SUBAGENT_REVIEW: OutputGenerator._subagent_review,
     ActionType.SYNTHESIZE_CONCLUSION: OutputGenerator._synthesize_conclusion,
+    ActionType.ASSESS_CONFOUNDERS: OutputGenerator._assess_confounders,
+    ActionType.STRATIFY_BY_COVARIATE: OutputGenerator._stratify_by_covariate,
+    ActionType.RUN_SENSITIVITY_ANALYSIS: OutputGenerator._run_sensitivity_analysis,
 }
