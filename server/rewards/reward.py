@@ -42,6 +42,7 @@ from server.biology.gene_index import (
     mechanism_set_score,
     score_pathways,
 )
+from server.rules.engine import RuleEngine
 from server.simulator.latent_state import FullLatentState
 
 
@@ -131,6 +132,12 @@ class RewardComputer:
             return rb
 
         rb.validity = self.w_val * (1.0 if output.success else 0.0)
+
+        # Penalty for non-useful repetition (redundant step without allow_rerun / quality reason)
+        if self._is_redundant_step(action, prev_state) and not RuleEngine._allow_analysis_rerun(action, prev_state):
+            redundancy_penalty = -0.7
+            rb.penalty += redundancy_penalty
+            rb.components["redundancy_penalty"] = redundancy_penalty
 
         ordering_score = self._ordering_score(action, prev_state)
         rb.ordering = 0.2 * ordering_score
@@ -314,6 +321,33 @@ class RewardComputer:
         return rb
 
     # ── helpers ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_redundant_step(action: ExperimentAction, s: FullLatentState) -> bool:
+        """True if this step was already completed (same action type completed before)."""
+        at = action.action_type
+        p = s.progress
+        REDUNDANT_FLAG = {
+            ActionType.COLLECT_SAMPLE: "samples_collected",
+            ActionType.PREPARE_LIBRARY: "library_prepared",
+            ActionType.SEQUENCE_CELLS: "cells_sequenced",
+            ActionType.RUN_QC: "qc_performed",
+            ActionType.FILTER_DATA: "data_filtered",
+            ActionType.NORMALIZE_DATA: "data_normalized",
+            ActionType.CLUSTER_CELLS: "cells_clustered",
+            ActionType.ANNOTATE_CELL_TYPES: "cell_types_annotated",
+            ActionType.DIFFERENTIAL_EXPRESSION: "de_performed",
+            ActionType.TRAJECTORY_ANALYSIS: "trajectories_inferred",
+            ActionType.PATHWAY_ENRICHMENT: "pathways_analyzed",
+            ActionType.REGULATORY_NETWORK_INFERENCE: "networks_inferred",
+            ActionType.MARKER_SELECTION: "markers_discovered",
+            ActionType.VALIDATE_MARKER: "markers_validated",
+            ActionType.DESIGN_FOLLOWUP: "followup_designed",
+            ActionType.REQUEST_SUBAGENT_REVIEW: "subagent_review_requested",
+            ActionType.SYNTHESIZE_CONCLUSION: "conclusion_reached",
+        }
+        flag = REDUNDANT_FLAG.get(at)
+        return flag is not None and getattr(p, flag, False)
 
     def _ordering_score(
         self, action: ExperimentAction, s: FullLatentState

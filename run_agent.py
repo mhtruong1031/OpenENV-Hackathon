@@ -45,7 +45,7 @@ def _parse_thinking_flag() -> bool:
 
 ENABLE_THINKING = _parse_thinking_flag()
 
-MODEL_ID = "Qwen/Qwen3.5-2B"
+MODEL_ID = "Qwen/Qwen3.5-0.8B"
 MAX_EPISODE_STEPS = int(os.getenv("RUN_AGENT_MAX_EPISODE_STEPS", "35"))
 PIPELINE_TASK = "text-generation"
 
@@ -206,8 +206,13 @@ def format_observation(
         parts.append(f"Markers found so far: {obs.discovered_markers[:5]}")
 
     parts.append(
-        'Output ONLY a single JSON object with these exact keys, no comments, no extra text:\n'
-        '{"action_type": "<one of the remaining steps>", "method": null, "parameters": {}, "justification": "<why>", "confidence": 0.8}'
+        "Output ONLY a single JSON object. No explanation, no preamble, no text before or after."
+    )
+    parts.append(
+        'Required format (one line): {"action_type": "<one of the remaining steps>", "method": null, "parameters": {}, "justification": "<why>", "confidence": 0.8}'
+    )
+    parts.append(
+        "If you use <think>, after </think> output nothing but this JSON line."
     )
     return "\n".join(parts)
 
@@ -774,13 +779,21 @@ def _npu_available() -> bool:
         return False
 
 
+def _mps_available() -> bool:
+    """Check if MPS (Apple M-series Metal / GPU) is available."""
+    return bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
+
+
 def resolve_torch_runtime() -> Dict[str, Any]:
-    # Optional: force device via env (e.g. RUN_AGENT_DEVICE=npu, cuda, cpu)
+    # Optional: force device via env (e.g. RUN_AGENT_DEVICE=npu, cuda, mps, cpu)
     force_device = os.getenv("RUN_AGENT_DEVICE", "").strip().lower()
     use_npu = (force_device == "npu") or (
-        force_device != "cuda" and force_device != "cpu" and _npu_available()
+        force_device not in ("cuda", "cpu", "mps") and _npu_available()
     )
-    use_cuda = (force_device == "cuda" or (not use_npu and torch.cuda.is_available()))
+    use_cuda = force_device == "cuda" or (not use_npu and torch.cuda.is_available())
+    use_mps = force_device == "mps" or (
+        not use_npu and not use_cuda and _mps_available()
+    )
 
     if use_npu:
         bf16 = getattr(torch.npu, "is_bf16_supported", lambda: True)()
@@ -792,10 +805,23 @@ def resolve_torch_runtime() -> Dict[str, Any]:
         return {
             "use_cuda": False,
             "use_npu": True,
+            "use_mps": False,
             "device": "npu:0",
             "dtype": dtype,
             "device_map": "auto",
             "device_name": device_name,
+        }
+    if use_mps:
+        # Apple M-series: Metal Performance Shaders (GPU). Prefer float16 for memory.
+        dtype = torch.float16
+        return {
+            "use_cuda": False,
+            "use_npu": False,
+            "use_mps": True,
+            "device": "mps",
+            "dtype": dtype,
+            "device_map": "auto",
+            "device_name": "Apple M-series (MPS)",
         }
     bf16 = bool(getattr(torch.cuda, "is_bf16_supported", lambda: False)()) if use_cuda else False
     dtype = torch.bfloat16 if bf16 else (
@@ -804,6 +830,7 @@ def resolve_torch_runtime() -> Dict[str, Any]:
     return {
         "use_cuda": use_cuda,
         "use_npu": False,
+        "use_mps": False,
         "device": "cuda:0" if use_cuda else "cpu",
         "dtype": dtype,
         "device_map": "auto" if use_cuda else None,
@@ -818,7 +845,11 @@ def main():
     active_pipeline = None
 
     runtime = resolve_torch_runtime()
-    backend = "npu" if runtime.get("use_npu") else ("cuda" if runtime["use_cuda"] else "cpu")
+    backend = (
+        "npu" if runtime.get("use_npu") else
+        "mps" if runtime.get("use_mps") else
+        "cuda" if runtime["use_cuda"] else "cpu"
+    )
     log(
         f"Using local model runtime: backend={backend} device={runtime['device']} "
         f"name={runtime['device_name']} dtype={runtime['dtype']}"
@@ -829,6 +860,8 @@ def main():
         try:
             if runtime.get("use_npu"):
                 pipe_device = runtime["device"]  # "npu:0"
+            elif runtime.get("use_mps"):
+                pipe_device = runtime["device"]  # "mps"
             elif runtime["use_cuda"]:
                 pipe_device = 0
             else:
@@ -997,6 +1030,56 @@ def main():
 
             action = parse_action(response)
             if action is None:
+                # One retry with a strict JSON-only prompt (model often outputs prose first)
+                retry_instruction = (
+                    "Your previous response was not valid JSON. "
+                    "Reply with ONLY a single JSON object, no other text. "
+                    'Example: {"action_type": "collect_sample", "method": null, "parameters": {}, "justification": "first step", "confidence": 0.8}'
+                )
+                if active_pipeline is not None:
+                    retry_prompt = f"{SYSTEM_PROMPT}\n\n{user_msg}\n\n{retry_instruction}"
+                    try:
+                        retry_out = run_with_pipeline(active_pipeline, retry_prompt)
+                        if retry_out and "</think>" in retry_out:
+                            retry_out = retry_out.split("</think>", 1)[-1].strip()
+                        response = retry_out or response
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        retry_messages = [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": user_msg},
+                            {"role": "assistant", "content": response},
+                            {"role": "user", "content": retry_instruction},
+                        ]
+                        retry_prompt = tokenizer.apply_chat_template(
+                            retry_messages,
+                            tokenize=False,
+                            add_generation_prompt=True,
+                            enable_thinking=ENABLE_THINKING,
+                        )
+                        inputs = tokenizer(retry_prompt, return_tensors="pt").to(model.device)
+                        max_new = 512
+                        with torch.no_grad():
+                            out_ids = model.generate(
+                                **inputs,
+                                max_new_tokens=max_new,
+                                do_sample=True,
+                                temperature=0.3,
+                                top_p=0.9,
+                                eos_token_id=eos_ids if eos_ids else None,
+                            )
+                        response = tokenizer.decode(
+                            out_ids[0][inputs["input_ids"].shape[1]:],
+                            skip_special_tokens=True,
+                        ).strip()
+                        if response and "</think>" in response:
+                            response = response.split("</think>", 1)[-1].strip()
+                    except Exception:
+                        pass
+                action = parse_action(response)
+            if action is None:
                 log(f"\n  [!] Parse failed, skipping step. Raw: {response[:150]}")
                 continue
 
@@ -1009,25 +1092,8 @@ def main():
                 if not r.success
             }
 
-            if should_force_terminal_conclusion(action, completed_types):
-                log(
-                    f"\n  [!] repeated completed meta step {action.action_type.value}, skipping."
-                )
-                continue
-
             skip_reason = None
-            if action.action_type in completed_types:
-                allow_rerun = action.parameters.get("allow_rerun") is True
-                rerunable = action.action_type in {
-                    ActionType.CLUSTER_CELLS,
-                    ActionType.DIFFERENTIAL_EXPRESSION,
-                    ActionType.INTEGRATE_BATCHES,
-                }
-                if not (allow_rerun and rerunable):
-                    skip_reason = (
-                        f"blocked repeat of completed step {action.action_type.value}"
-                    )
-            elif action.action_type in failed_types:
+            if action.action_type in failed_types:
                 if should_block_failed_reattempt(
                     obs.pipeline_history, action.action_type
                 ):
@@ -1043,7 +1109,7 @@ def main():
 
             log(f"\nStep {step + 1}: {action.action_type.value}  ({gen_time:.1f}s)")
             if thinking:
-                log(f"  Thinking: {thinking[:200]}")
+                log(f"  Thinking: {thinking}")
             if action.justification:
                 log(f"  Rationale: {action.justification}")
             else:

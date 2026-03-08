@@ -204,15 +204,15 @@ class RuleEngine:
             ActionType.REQUEST_SUBAGENT_REVIEW: "subagent_review_requested",
             ActionType.SYNTHESIZE_CONCLUSION: "conclusion_reached",
         }
+        # Never block repetition; only record a soft violation when repeat is not useful
         flag = REDUNDANT.get(at)
         if flag and getattr(p, flag, False):
             if self._allow_analysis_rerun(action, s):
                 return vs
-        if flag and getattr(p, flag, False):
             vs.append(RuleViolation(
                 rule_id=f"redundant_{at.value}",
-                severity=Severity.HARD,
-                message=f"Step '{at.value}' already completed — redundant action blocked",
+                severity=Severity.SOFT,
+                message=f"Step '{at.value}' already completed — redundant (use allow_rerun for intentional reruns)",
             ))
         return vs
 

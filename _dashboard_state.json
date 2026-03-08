@@ -1,29 +1,29 @@
 {
-  "timestamp": 1772962727.972084,
+  "timestamp": 1772963894.9701571,
   "step": 0,
   "episode_done": false,
   "cumulative_reward": 0.0,
   "gen_time_s": 0.0,
   "model_response_raw": "",
   "model_thinking": "",
-  "thinking_enabled": true,
+  "thinking_enabled": false,
   "task": {
-    "problem_statement": "Validate candidate biomarker INS for type 2 diabetes in pancreas tissue using single-cell RNA sequencing.",
+    "problem_statement": "Determine the effect of anti-TNF biologic therapy on cell states in synovium tissue affected by rheumatoid arthritis.",
     "organism": "human",
-    "tissue": "tumor",
+    "tissue": "synovium",
     "modality": "scRNA-seq",
     "conditions": [
-      "tumor",
-      "adjacent_normal"
+      "untreated_rheumatoid_arthritis",
+      "anti_TNF_treated"
     ],
-    "budget_limit": 85043.88301343405,
-    "time_limit_days": 100.93688306304155
+    "budget_limit": 79692.86781856765,
+    "time_limit_days": 156.71547260571253
   },
   "resources": {
     "budget_used": 0.0,
-    "budget_remaining": 85043.88,
+    "budget_remaining": 79692.87,
     "time_used_days": 0.0,
-    "time_remaining_days": 100.9,
+    "time_remaining_days": 156.7,
     "samples_consumed": 0,
     "compute_hours_used": 0.0
   },
@@ -36,114 +36,81 @@
   "latent": {
     "cell_populations": [
       {
-        "name": "alpha_cell",
-        "proportion": 0.528,
+        "name": "fibroblast",
+        "proportion": 0.379,
         "marker_genes": [
-          "GCG",
-          "ARX",
-          "IRX2"
+          "COL1A1",
+          "FAP",
+          "THY1"
         ],
-        "state": "normal"
+        "state": "activated"
       },
       {
-        "name": "delta_cell",
-        "proportion": 0.116,
+        "name": "CD4_T_cell",
+        "proportion": 0.182,
         "marker_genes": [
-          "SST",
-          "HHEX"
+          "CD3D",
+          "CD4",
+          "IL7R"
         ],
-        "state": "normal"
+        "state": "quiescent"
       },
       {
-        "name": "ductal",
-        "proportion": 0.235,
-        "marker_genes": [
-          "KRT19",
-          "SOX9",
-          "CFTR"
-        ],
-        "state": "normal"
-      },
-      {
-        "name": "macrophage",
-        "proportion": 0.122,
-        "marker_genes": [
-          "CD68",
-          "MRC1",
-          "CD163",
-          "IL10"
-        ],
-        "state": "M2_like"
-      },
-      {
-        "name": "T_cell",
-        "proportion": 0.201,
+        "name": "CD8_T_cell",
+        "proportion": 0.187,
         "marker_genes": [
           "CD3D",
           "CD8A",
-          "GZMB",
-          "PDCD1"
+          "GZMB"
         ],
-        "state": "exhausted"
+        "state": "activated"
       },
       {
-        "name": "fibroblast",
-        "proportion": 0.221,
+        "name": "B_cell",
+        "proportion": 0.141,
         "marker_genes": [
-          "FAP",
-          "ACTA2",
-          "COL1A1",
-          "PDPN"
+          "CD19",
+          "MS4A1",
+          "CD79A"
         ],
-        "state": "CAF"
-      },
-      {
-        "name": "malignant",
-        "proportion": 0.226,
-        "marker_genes": [
-          "EPCAM",
-          "KRT18",
-          "MKI67"
-        ],
-        "state": "tumor"
+        "state": "quiescent"
       },
       {
         "name": "endothelial",
-        "proportion": 0.142,
+        "proportion": 0.111,
         "marker_genes": [
           "PECAM1",
-          "VWF",
-          "CDH5"
+          "VWF"
         ],
         "state": "quiescent"
       }
     ],
     "true_markers": [
-      "MRC1",
-      "CD163",
-      "FAP",
-      "EPCAM"
+      "TNF",
+      "IL6",
+      "MMP3",
+      "CXCL13"
     ],
     "causal_mechanisms": [
-      "TAM-driven immune suppression",
-      "CAF\u2013tumor crosstalk"
+      "TNF/NF-kB-driven synovial inflammation",
+      "Th17-mediated cartilage destruction via MMPs"
     ],
     "true_pathways": {
-      "insulin_signalling": 0.395,
-      "ER_stress_response": 0.804,
-      "oxidative_stress": 0.774,
-      "glucagon_signalling": 0.738,
-      "apoptosis": 0.673
+      "JAK_STAT_signalling": 0.785,
+      "TNF_signalling": 0.723,
+      "Th17_differentiation": 0.633,
+      "NF_kB_signalling": 0.826,
+      "matrix_metalloproteinase_activity": 0.847
     },
-    "true_de_genes_count": 6,
-    "true_regulatory_network_size": 0,
+    "true_de_genes_count": 9,
+    "true_regulatory_network_size": 16,
     "confounders": {},
-    "n_true_cells": 15839,
+    "n_true_cells": 10645,
     "technical": {
-      "ambient_rna_fraction": 0.03468406923411367,
-      "doublet_rate": 0.051732313714977204,
-      "dropout_rate": 0.09928356548580251,
-      "sample_quality": 0.8231121593049546,
+      "ambient_rna_fraction": 0.01361753333205917,
+      "doublet_rate": 0.018016396127667825,
+      "dropout_rate": 0.12560439470853485,
+      "sample_quality": 0.8836417095836135,
       "library_complexity": 0.8,
       "capture_efficiency": 0.6
     },
@@ -178,8 +145,6 @@
       "n_markers_found": null,
       "n_cohort_per_group": null
     },
-    "hidden_failure_conditions": [
-      "Composition-driven differential expression can mimic true DE."
-    ]
+    "hidden_failure_conditions": []
   }
 }
