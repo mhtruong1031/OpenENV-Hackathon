@@ -6,7 +6,7 @@ import json
 import re
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -14,7 +14,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from models import ActionType, ExperimentAction, ExperimentObservation
 from server.hackathon_environment import BioExperimentEnvironment
 
-MODEL_ID = "Qwen/Qwen3.5-2B"
+MODEL_ID = "Qwen/Qwen3.5-0.8B"
 MAX_EPISODE_STEPS = 12
 
 ACTION_TYPES = [a.value for a in ActionType]
@@ -108,7 +108,24 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
+def select_device() -> Tuple[torch.device, torch.dtype, str]:
+    """Prefer MPS (Apple Neural Engine / M-series GPU) over CPU.
+
+    True ANE access requires Core ML; MPS is the PyTorch-native path that
+    offloads computation to Apple Silicon's GPU/NPU fabric.
+    bfloat16 is not yet fully supported on MPS, so float16 is used instead.
+    """
+    if torch.backends.mps.is_available():
+        return torch.device("mps"), torch.float16, "mps"
+    if torch.cuda.is_available():
+        return torch.device("cuda"), torch.bfloat16, "cuda"
+    return torch.device("cpu"), torch.float32, "cpu"
+
+
 def main():
+    device, dtype, device_name = select_device()
+    log(f"Target device: {device_name.upper()}  (dtype={dtype})")
+
     log(f"Loading tokenizer for {MODEL_ID} ...")
     tokenizer = AutoTokenizer.from_pretrained(
         MODEL_ID, trust_remote_code=True,
@@ -117,10 +134,11 @@ def main():
 
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
+        dtype=dtype,
+        device_map={"": device},
         trust_remote_code=True,
     )
+    model.eval()
     log(f"Model loaded. Device: {model.device}")
 
     eos_ids: List[int] = []
