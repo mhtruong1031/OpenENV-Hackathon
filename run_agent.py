@@ -1,25 +1,51 @@
-"""Run the bio-experiment environment with Qwen3.5-2B as the planning agent."""
+"""Run the bio-experiment environment with Qwen3.5-0.8B as the planning agent."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
-import sys
 import time
 from typing import Any, Dict, List, Optional
-
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 from models import ActionType, ExperimentAction, ExperimentObservation
 from server.hackathon_environment import BioExperimentEnvironment
 
+USE_OPENAI = os.getenv("RUN_AGENT_USE_OPENAI", "1").strip().lower() not in {"0", "false", "off"}
+USE_PIPELINE = os.getenv("RUN_AGENT_USE_PIPELINE", "0").strip().lower() not in {"0", "false", "off"}
+
+if not USE_OPENAI:
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    if USE_PIPELINE:
+        from transformers import pipeline
+
 MODEL_ID = "Qwen/Qwen3.5-0.8B"
-MAX_EPISODE_STEPS = 12
-PIPELINE_TASK = "image-text-to-text"
-USE_PIPELINE = True
+MAX_EPISODE_STEPS = int(os.getenv("RUN_AGENT_MAX_EPISODE_STEPS", "12"))
+PIPELINE_TASK = "text-generation"
+OPENAI_MODEL = os.getenv("RUN_AGENT_OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_TIMEOUT_SECONDS = float(os.getenv("RUN_AGENT_OPENAI_TIMEOUT_SECONDS", "60"))
+OPENAI_MAX_TOKENS = int(os.getenv("RUN_AGENT_OPENAI_MAX_TOKENS", "220"))
 
 ACTION_TYPES = [a.value for a in ActionType]
+ACTION_TYPE_ALIASES = {
+    "collect_samples": ActionType.COLLECT_SAMPLE.value,
+    "collect_sample_from_bone_marrow": ActionType.COLLECT_SAMPLE.value,
+    "collect_samples_from_bone_marrow": ActionType.COLLECT_SAMPLE.value,
+    "prepare_sc_library": ActionType.PREPARE_LIBRARY.value,
+    "sequence_single_cells": ActionType.SEQUENCE_CELLS.value,
+    "qc": ActionType.RUN_QC.value,
+    "run_quality_control": ActionType.RUN_QC.value,
+    "cluster": ActionType.CLUSTER_CELLS.value,
+    "de_analysis": ActionType.DIFFERENTIAL_EXPRESSION.value,
+    "differential_expression_analysis": ActionType.DIFFERENTIAL_EXPRESSION.value,
+    "trajectory_inference": ActionType.TRAJECTORY_ANALYSIS.value,
+    "infer_trajectory": ActionType.TRAJECTORY_ANALYSIS.value,
+    "network_inference": ActionType.REGULATORY_NETWORK_INFERENCE.value,
+    "select_markers": ActionType.MARKER_SELECTION.value,
+    "final_conclusion": ActionType.SYNTHESIZE_CONCLUSION.value,
+}
 
 SYSTEM_PROMPT = """\
 You are an expert biologist planning a single-cell experiment pipeline.
@@ -60,25 +86,142 @@ def format_observation(obs: ExperimentObservation) -> str:
     return "\n".join(parts)
 
 
-def parse_action(text: str) -> Optional[ExperimentAction]:
-    match = re.search(r"\{[^{}]*\}", text, re.DOTALL)
-    if not match:
-        return None
-    try:
-        d = json.loads(match.group())
-    except json.JSONDecodeError:
+def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+    stripped = text.strip()
+    fence_prefix = "```"
+    if stripped.startswith(fence_prefix) and stripped.endswith(fence_prefix):
+        lines = stripped.splitlines()
+        if len(lines) >= 3:
+            stripped = "\n".join(lines[1:-1]).strip()
+
+    candidates = [stripped]
+    start = stripped.find("{")
+    while start != -1:
+        depth = 0
+        for idx in range(start, len(stripped)):
+            char = stripped[idx]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    candidates.append(stripped[start:idx + 1])
+                    break
+        start = stripped.find("{", start + 1)
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def normalize_action_type(raw_action_type: Any) -> Optional[str]:
+    if not isinstance(raw_action_type, str):
         return None
 
-    action_type = d.get("action_type")
-    if action_type not in ACTION_TYPES:
+    candidate = raw_action_type.strip().lower()
+    if candidate in ACTION_TYPES:
+        return candidate
+    if candidate in ACTION_TYPE_ALIASES:
+        return ACTION_TYPE_ALIASES[candidate]
+
+    candidate = re.sub(r"[^a-z0-9]+", "_", candidate).strip("_")
+    if candidate in ACTION_TYPES:
+        return candidate
+    if candidate in ACTION_TYPE_ALIASES:
+        return ACTION_TYPE_ALIASES[candidate]
+
+    heuristics = [
+        (("collect", "sample"), ActionType.COLLECT_SAMPLE.value),
+        (("library",), ActionType.PREPARE_LIBRARY.value),
+        (("sequence",), ActionType.SEQUENCE_CELLS.value),
+        (("qc",), ActionType.RUN_QC.value),
+        (("quality", "control"), ActionType.RUN_QC.value),
+        (("filter",), ActionType.FILTER_DATA.value),
+        (("normal",), ActionType.NORMALIZE_DATA.value),
+        (("integrat", "batch"), ActionType.INTEGRATE_BATCHES.value),
+        (("cluster",), ActionType.CLUSTER_CELLS.value),
+        (("differential", "expression"), ActionType.DIFFERENTIAL_EXPRESSION.value),
+        (("pathway",), ActionType.PATHWAY_ENRICHMENT.value),
+        (("trajectory",), ActionType.TRAJECTORY_ANALYSIS.value),
+        (("network",), ActionType.REGULATORY_NETWORK_INFERENCE.value),
+        (("marker",), ActionType.MARKER_SELECTION.value),
+        (("validat", "marker"), ActionType.VALIDATE_MARKER.value),
+        (("followup",), ActionType.DESIGN_FOLLOWUP.value),
+        (("review",), ActionType.REQUEST_SUBAGENT_REVIEW.value),
+        (("conclusion",), ActionType.SYNTHESIZE_CONCLUSION.value),
+    ]
+    for fragments, normalized in heuristics:
+        if all(fragment in candidate for fragment in fragments):
+            return normalized
+    return None
+
+
+def parse_action(text: str) -> Optional[ExperimentAction]:
+    d = extract_json_object(text)
+    if d is not None:
+        action_type = normalize_action_type(d.get("action_type"))
+        if action_type is None:
+            return None
+
+        parameters = d.get("parameters") or {}
+        if not isinstance(parameters, dict):
+            parameters = {}
+
+        confidence = d.get("confidence", 0.5)
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            confidence = 0.5
+
+        return ExperimentAction(
+            action_type=ActionType(action_type),
+            method=d.get("method"),
+            parameters=parameters,
+            justification=d.get("justification"),
+            confidence=min(1.0, max(0.0, confidence)),
+        )
+
+    action_match = re.search(r'"action_type"\s*:\s*"([^"]+)"', text)
+    if not action_match:
         return None
+
+    action_type = normalize_action_type(action_match.group(1))
+    if action_type is None:
+        return None
+
+    method_match = re.search(r'"method"\s*:\s*"([^"]+)"', text)
+    confidence_match = re.search(r'"confidence"\s*:\s*([0-9]*\.?[0-9]+)', text)
+    justification_match = re.search(
+        r'"justification"\s*:\s*"((?:[^"\\]|\\.)*)"',
+        text,
+        re.DOTALL,
+    )
+
+    confidence = 0.5
+    if confidence_match:
+        try:
+            confidence = float(confidence_match.group(1))
+        except ValueError:
+            confidence = 0.5
+
+    justification = None
+    if justification_match:
+        try:
+            justification = json.loads(f'"{justification_match.group(1)}"')
+        except json.JSONDecodeError:
+            justification = justification_match.group(1)
 
     return ExperimentAction(
         action_type=ActionType(action_type),
-        method=d.get("method"),
-        parameters=d.get("parameters") or {},
-        justification=d.get("justification"),
-        confidence=min(1.0, max(0.0, float(d.get("confidence", 0.5)))),
+        method=method_match.group(1) if method_match else None,
+        parameters={},
+        justification=justification,
+        confidence=min(1.0, max(0.0, confidence)),
     )
 
 
@@ -115,29 +258,31 @@ def build_observation_prompt(obs: ExperimentObservation) -> str:
 
 
 def run_with_pipeline(pipe, prompt: str) -> str:
-    attempts = [
-        {"text": prompt},
-        {"text": prompt, "image": None},
-        {"image": prompt},
-    ]
+    try:
+        result = pipe(prompt, max_new_tokens=220, return_full_text=False)
+    except Exception:
+        return ""
 
-    for payload in attempts:
-        try:
-            result = pipe(payload, max_new_tokens=220)
-            if isinstance(result, list) and result:
-                result = result[0]
-            if isinstance(result, dict):
-                text = result.get("generated_text") or result.get("text") or result.get("answer")
-            elif isinstance(result, str):
-                text = result
-            else:
-                text = ""
-            if isinstance(text, str) and text.strip():
-                return text.strip()
-        except Exception:
-            continue
+    if isinstance(result, list) and result:
+        result = result[0]
+    if isinstance(result, dict):
+        text = result.get("generated_text") or result.get("text") or result.get("answer")
+    elif isinstance(result, str):
+        text = result
+    else:
+        text = ""
+    return text.strip() if isinstance(text, str) else ""
 
-    return ""
+
+def run_with_openai(messages: List[Dict[str, str]]) -> str:
+    from openai_oauth_client import run_openai_chat
+
+    return run_openai_chat(
+        messages=messages,
+        model=OPENAI_MODEL,
+        max_tokens=OPENAI_MAX_TOKENS,
+        timeout_seconds=OPENAI_TIMEOUT_SECONDS,
+    )
 
 
 def main():
@@ -145,42 +290,46 @@ def main():
     model = None
     eos_ids: List[int] = []
     active_pipeline = None
+    if USE_OPENAI:
+        log(f"Using OpenAI chat model ({OPENAI_MODEL}) with OAuth token auth.")
+    else:
+        if USE_PIPELINE:
+            log(f"Loading pipeline ({PIPELINE_TASK}) for {MODEL_ID} ...")
+            try:
+                active_pipeline = pipeline(
+                    PIPELINE_TASK,
+                    model=MODEL_ID,
+                    trust_remote_code=True,
+                    dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                )
+                log("Pipeline loaded.")
+            except Exception as exc:
+                log(f"Pipeline load failed ({exc}), falling back to tokenizer+model.")
 
-    if USE_PIPELINE:
-        log(f"Loading pipeline ({PIPELINE_TASK}) for {MODEL_ID} ...")
-        try:
-            active_pipeline = pipeline(
-                PIPELINE_TASK,
-                model=MODEL_ID,
-                trust_remote_code=True,
-                torch_dtype=torch.bfloat16,
+        if active_pipeline is None:
+            log(f"Loading tokenizer for {MODEL_ID} ...")
+            tokenizer = AutoTokenizer.from_pretrained(
+                MODEL_ID, trust_remote_code=True,
             )
-            log("Pipeline loaded.")
-        except Exception as exc:
-            log(f"Pipeline load failed ({exc}), falling back to tokenizer+model.")
+            log("Tokenizer loaded. Loading model (this may download files on first run) ...")
 
-    if active_pipeline is None:
-        log(f"Loading tokenizer for {MODEL_ID} ...")
-        tokenizer = AutoTokenizer.from_pretrained(
-            MODEL_ID, trust_remote_code=True,
-        )
-        log("Tokenizer loaded. Loading model (this downloads ~4 GB on first run) ...")
+            device_map = "auto" if torch.cuda.is_available() else None
 
-        model = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID,
-            torch_dtype=torch.bfloat16,
-            device_map="auto",
-            trust_remote_code=True,
-        )
-        log(f"Model loaded. Device: {model.device}")
+            model = AutoModelForCausalLM.from_pretrained(
+                MODEL_ID,
+                dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                device_map=device_map,
+                trust_remote_code=True,
+            )
+            log(f"Model loaded. Device: {model.device}")
 
-        if tokenizer.eos_token_id is not None:
-            eos_ids.append(tokenizer.eos_token_id)
-        extra = tokenizer.convert_tokens_to_ids(["<|im_end|>", "<|endoftext|>"])
-        for tid in extra:
-            if isinstance(tid, int) and tid not in eos_ids:
-                eos_ids.append(tid)
-        log(f"EOS token ids: {eos_ids}")
+            if tokenizer.eos_token_id is not None:
+                eos_ids.append(tokenizer.eos_token_id)
+            extra = tokenizer.convert_tokens_to_ids(["<|im_end|>", "<|endoftext|>"])
+            for tid in extra:
+                if isinstance(tid, int) and tid not in eos_ids:
+                    eos_ids.append(tid)
+            log(f"EOS token ids: {eos_ids}")
 
     env = BioExperimentEnvironment()
     obs = env.reset()
@@ -220,7 +369,9 @@ def main():
                 )
 
         t0 = time.time()
-        if active_pipeline is not None:
+        if USE_OPENAI:
+            response = run_with_openai(messages)
+        elif active_pipeline is not None:
             response = run_with_pipeline(active_pipeline, prompt)
             if not response:
                 response = format_observation(obs)
