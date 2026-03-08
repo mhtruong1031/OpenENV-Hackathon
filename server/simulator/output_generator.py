@@ -431,6 +431,18 @@ class OutputGenerator:
             observed[f"FP_PATHWAY_{i}"] = float(self.noise.rng.uniform(0.3, 0.6))
 
         top = sorted(observed.items(), key=lambda kv: kv[1], reverse=True)[:15]
+        top_pathway_names = [p for p, _ in top]
+        true_pathway_set = set(true_pathways)
+        recovered_true = sum(1 for p in top_pathway_names if p in true_pathway_set)
+        fp_count = sum(1 for p in top_pathway_names if p.startswith("FP_PATHWAY_"))
+        n_top = max(len(top), 1)
+        fp_fraction = fp_count / n_top
+        true_recall = recovered_true / max(len(true_pathway_set), 1)
+        rerun_recommended = bool(
+            (de_was_run and (noise_level > 0.18 or fp_fraction > 0.35))
+            or (not de_was_run)
+            or (true_recall < 0.25)
+        )
         base_quality = 0.80 if de_was_run else 0.45
         return IntermediateOutput(
             output_type=OutputType.PATHWAY_RESULT,
@@ -442,6 +454,14 @@ class OutputGenerator:
                 "top_pathways": [
                     {"pathway": p, "score": round(sc, 3)} for p, sc in top
                 ],
+                "quality_metrics": {
+                    "de_genes_found": de_genes_found,
+                    "noise_level": round(noise_level, 4),
+                    "false_positive_fraction": round(fp_fraction, 4),
+                    "true_pathway_recall_estimate": round(true_recall, 4),
+                    "n_top_pathways": len(top),
+                    "rerun_recommended": rerun_recommended,
+                },
             },
             uncertainty=noise_level,
             artifacts_available=["enrichment_table"],
@@ -497,6 +517,11 @@ class OutputGenerator:
         ]
         fp = self.noise.generate_false_positives(200, 0.01)
         observed_markers.extend(fp)
+        true_marker_set = set(true_markers)
+        n_candidates = len(observed_markers)
+        n_true_hits = sum(1 for m in observed_markers if m in true_marker_set)
+        fp_fraction = 1.0 - (n_true_hits / max(n_candidates, 1))
+        rerun_recommended = bool(fp_fraction > 0.55 or n_true_hits < 2)
         return IntermediateOutput(
             output_type=OutputType.MARKER_RESULT,
             step_index=idx,
@@ -504,7 +529,13 @@ class OutputGenerator:
             summary=f"Selected {len(observed_markers)} candidate markers",
             data={
                 "markers": observed_markers[:20],
-                "n_candidates": len(observed_markers),
+                "n_candidates": n_candidates,
+                "quality_metrics": {
+                    "estimated_true_hits": n_true_hits,
+                    "estimated_false_positive_rate": round(fp_fraction, 4),
+                    "noise_level": round(noise_level, 4),
+                    "rerun_recommended": rerun_recommended,
+                },
             },
             uncertainty=noise_level,
             artifacts_available=["marker_list"],

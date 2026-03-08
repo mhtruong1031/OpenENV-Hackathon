@@ -1434,6 +1434,115 @@ AGENT_ACTION_GUIDANCE: Dict[ActionType, str] = {
     ),
 }
 
+ACTION_PARAMETER_GUIDANCE: Dict[ActionType, List[str]] = {
+    ActionType.COLLECT_SAMPLE: [
+        "sample_source (str, optional): tissue compartment to collect from (for example 'bone_marrow').",
+        "n_samples (int, optional): number of donor/sample units to collect.",
+        "preservation (str, optional): handling protocol such as 'fresh' or 'cryopreserved'.",
+    ],
+    ActionType.SELECT_COHORT: [
+        "cohort_a (str, required): primary condition/group label.",
+        "cohort_b (str, optional): comparator group label.",
+        "stratify_by (list[str], optional): covariates like age/sex/batch.",
+        "target_n_per_group (int, optional): desired group size.",
+    ],
+    ActionType.PREPARE_LIBRARY: [
+        "chemistry (str, optional): library chemistry (for example '3prime_v3').",
+        "target_cells (int, optional): target recovered cells per sample.",
+        "indexing_strategy (str, optional): multiplexing/indexing protocol.",
+    ],
+    ActionType.CULTURE_CELLS: [
+        "duration_days (float, optional): planned culture duration.",
+        "media_condition (str, optional): media or cytokine context.",
+        "density_cells_per_ml (float, optional): seeding density.",
+    ],
+    ActionType.PERTURB_GENE: [
+        "target_gene (str, required): gene symbol to perturb.",
+        "perturbation_type (str, optional): knockdown/knockout/overexpression.",
+        "delivery_method (str, optional): CRISPRi/lentivirus/electroporation.",
+    ],
+    ActionType.PERTURB_COMPOUND: [
+        "compound_name (str, required): perturbagen name.",
+        "dose_uM (float, optional): nominal concentration in micromolar.",
+        "duration_hours (float, optional): treatment duration.",
+    ],
+    ActionType.SEQUENCE_CELLS: [
+        "read_depth (int, optional): target reads per cell.",
+        "read_length (str, optional): sequencing configuration (for example '28x91').",
+        "lane_count (int, optional): number of lanes to allocate.",
+    ],
+    ActionType.RUN_QC: [
+        "min_genes (int, optional): cell filtering lower bound.",
+        "max_mito_pct (float, optional): mitochondrial content threshold (0-100).",
+        "doublet_strategy (str, optional): method for doublet detection.",
+    ],
+    ActionType.FILTER_DATA: [
+        "min_counts (int, optional): minimum UMI count per cell.",
+        "max_counts (int, optional): upper UMI bound to remove outliers.",
+        "min_cells_per_gene (int, optional): gene prevalence threshold.",
+    ],
+    ActionType.NORMALIZE_DATA: [
+        "method (str, optional): normalization approach (for example 'log1p').",
+        "target_sum (float, optional): scaling target per cell.",
+        "regress_out (list[str], optional): confounders to regress.",
+    ],
+    ActionType.INTEGRATE_BATCHES: [
+        "batch_key (str, required): metadata key identifying batches.",
+        "integration_method (str, optional): harmony/bbknn/mnn/scvi.",
+        "reference_batch (str, optional): anchor batch for integration.",
+    ],
+    ActionType.CLUSTER_CELLS: [
+        "resolution (float, optional): clustering granularity.",
+        "n_neighbors (int, optional): neighborhood graph size.",
+        "embedding (str, optional): representation such as pca/scvi.",
+    ],
+    ActionType.DIFFERENTIAL_EXPRESSION: [
+        "comparison (str, required): contrast label (for example 'disease_vs_control').",
+        "group_by (str, optional): metadata key defining groups/clusters.",
+        "min_logfc (float, optional): minimum effect size threshold.",
+    ],
+    ActionType.TRAJECTORY_ANALYSIS: [
+        "root_population (str, optional): starting state/cell population.",
+        "method (str, optional): trajectory method (for example 'paga').",
+        "lineage_key (str, optional): subset or lineage selector.",
+    ],
+    ActionType.PATHWAY_ENRICHMENT: [
+        "gene_set_library (str, optional): pathway database name.",
+        "ranking_metric (str, optional): statistic used to rank genes.",
+        "fdr_threshold (float, optional): significance cutoff.",
+    ],
+    ActionType.REGULATORY_NETWORK_INFERENCE: [
+        "tf_list_source (str, optional): source of transcription-factor priors.",
+        "method (str, optional): inference backend (for example 'grnboost2').",
+        "min_edge_weight (float, optional): edge confidence cutoff.",
+    ],
+    ActionType.MARKER_SELECTION: [
+        "top_k (int, optional): markers to keep per cluster/contrast.",
+        "selection_basis (str, optional): de_auc/de_logfc/specificity.",
+        "target_population (str, optional): cluster or label to prioritize.",
+    ],
+    ActionType.VALIDATE_MARKER: [
+        "marker_genes (list[str], required): genes to validate experimentally.",
+        "assay (str, optional): validation assay such as 'flow_cytometry'.",
+        "replicates (int, optional): experimental replicate count.",
+    ],
+    ActionType.DESIGN_FOLLOWUP: [
+        "objective (str, required): uncertainty or hypothesis to resolve.",
+        "proposed_experiments (list[str], optional): concrete follow-up steps.",
+        "priority (str, optional): low/medium/high urgency.",
+    ],
+    ActionType.REQUEST_SUBAGENT_REVIEW: [
+        "review_focus (str, required): what to critique (for example 'qc_thresholds').",
+        "subagent_type (str, optional): preferred specialist role.",
+        "questions (list[str], optional): explicit questions for the reviewer.",
+    ],
+    ActionType.SYNTHESIZE_CONCLUSION: [
+        "claims (list[dict], required): structured claims with markers, mechanisms, pathways, and confidence.",
+        "evidence_steps (list[int], optional): supporting pipeline step indices.",
+        "open_questions (list[str], optional): unresolved uncertainties.",
+    ],
+}
+
 AGENT_ENVIRONMENT_RULES: List[str] = [
     (
         "Each successful action already returns summarized scientific evidence, "
@@ -1599,6 +1708,12 @@ def build_agent_system_prompt() -> str:
         f"  - {action_type.value}: {AGENT_ACTION_GUIDANCE[action_type]}"
         for action_type in ActionType
     )
+    lines.append("")
+    lines.append("Action parameter contract (use these parameter keys/types):")
+    for action_type in ActionType:
+        lines.append(f"  - {action_type.value}:")
+        for field_doc in ACTION_PARAMETER_GUIDANCE[action_type]:
+            lines.append(f"      * {field_doc}")
     lines.extend([
         "",
         "Respond with ONLY valid JSON, nothing else:",

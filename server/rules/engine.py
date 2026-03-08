@@ -193,12 +193,45 @@ class RuleEngine:
         }
         flag = REDUNDANT.get(at)
         if flag and getattr(p, flag, False):
+            if self._allow_analysis_rerun(action, s):
+                return vs
+        if flag and getattr(p, flag, False):
             vs.append(RuleViolation(
                 rule_id=f"redundant_{at.value}",
                 severity=Severity.HARD,
                 message=f"Step '{at.value}' already completed — redundant action blocked",
             ))
         return vs
+
+    @staticmethod
+    def _allow_analysis_rerun(
+        action: ExperimentAction,
+        s: FullLatentState,
+    ) -> bool:
+        if action.action_type not in {
+            ActionType.MARKER_SELECTION,
+            ActionType.PATHWAY_ENRICHMENT,
+        }:
+            return False
+        if not bool(action.parameters.get("allow_rerun")):
+            return False
+
+        max_reruns = 1
+        if action.action_type == ActionType.MARKER_SELECTION:
+            if s.marker_selection_runs >= 1 + max_reruns:
+                return False
+            q = s.marker_analysis_quality
+            fp_rate = float(q.get("estimated_false_positive_rate", 0.0))
+            rerun_flag = float(q.get("rerun_recommended", 0.0)) > 0.5
+            return rerun_flag or fp_rate >= 0.55
+
+        if s.pathway_enrichment_runs >= 1 + max_reruns:
+            return False
+        q = s.pathway_analysis_quality
+        noise_level = float(q.get("noise_level", 0.0))
+        fp_fraction = float(q.get("false_positive_fraction", 0.0))
+        rerun_flag = float(q.get("rerun_recommended", 0.0)) > 0.5
+        return rerun_flag or noise_level >= 0.2 or fp_fraction >= 0.35
 
     # ── causal validity ─────────────────────────────────────────────────
 

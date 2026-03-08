@@ -142,6 +142,11 @@ class FullLatentState(BaseModel):
     mechanism_confidence: Dict[str, float] = Field(default_factory=dict)
     discovered_de_genes: List[str] = Field(default_factory=list)
     discovered_clusters: List[str] = Field(default_factory=list)
+    marker_validation_stats: Dict[str, int] = Field(default_factory=dict)
+    marker_analysis_quality: Dict[str, float] = Field(default_factory=dict)
+    pathway_analysis_quality: Dict[str, float] = Field(default_factory=dict)
+    marker_selection_runs: int = 0
+    pathway_enrichment_runs: int = 0
     task_modality: str = "scRNA-seq"
     step_count: int = 0
     rng_seed: int = 42

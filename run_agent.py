@@ -38,6 +38,7 @@ ENABLE_THINKING = _parse_thinking_flag()
 
 MODEL_ID = "Qwen/Qwen3.5-0.8B"
 MAX_EPISODE_STEPS = int(os.getenv("RUN_AGENT_MAX_EPISODE_STEPS", "12"))
+MAX_ANALYSIS_RERUNS = int(os.getenv("RUN_AGENT_MAX_ANALYSIS_RERUNS", "1"))
 PIPELINE_TASK = "text-generation"
 
 ACTION_TYPES = [a.value for a in ActionType]
@@ -380,6 +381,80 @@ FALLBACK_METHODS = {
     ActionType.PATHWAY_ENRICHMENT: "gseapy.prerank",
     ActionType.MARKER_SELECTION: "scanpy.tl.rank_genes_groups",
 }
+
+
+def _count_action_attempts(
+    obs: ExperimentObservation, action_type: ActionType
+) -> Dict[str, int]:
+    total = 0
+    success = 0
+    failed = 0
+    for rec in obs.pipeline_history:
+        if rec.action_type != action_type:
+            continue
+        total += 1
+        if rec.success:
+            success += 1
+        else:
+            failed += 1
+    return {"total": total, "success": success, "failed": failed}
+
+
+def _rerun_requested_from_context(action: ExperimentAction) -> bool:
+    text_parts: List[str] = []
+    if isinstance(action.justification, str):
+        text_parts.append(action.justification.lower())
+    if action.parameters:
+        text_parts.append(json.dumps(action.parameters).lower())
+    text = " ".join(text_parts)
+    keywords = ("rerun", "retry", "reanaly", "refine", "re-check", "recheck")
+    return any(k in text for k in keywords)
+
+
+def _should_allow_analysis_rerun(
+    obs: ExperimentObservation,
+    action: ExperimentAction,
+) -> bool:
+    at = action.action_type
+    if at not in {ActionType.MARKER_SELECTION, ActionType.PATHWAY_ENRICHMENT}:
+        return False
+
+    counts = _count_action_attempts(obs, at)
+    if counts["success"] < 1:
+        return False
+    if counts["success"] >= 1 + MAX_ANALYSIS_RERUNS:
+        return False
+
+    analysis_quality = {}
+    validation_stats = {}
+    if isinstance(obs.metadata, dict):
+        quality_root = obs.metadata.get("analysis_quality", {})
+        if isinstance(quality_root, dict):
+            if at == ActionType.MARKER_SELECTION:
+                analysis_quality = quality_root.get("marker", {}) or {}
+            else:
+                analysis_quality = quality_root.get("pathway", {}) or {}
+            validation_stats = quality_root.get("marker_validation", {}) or {}
+
+    quality_signal = False
+    if at == ActionType.MARKER_SELECTION:
+        fp_rate = float(analysis_quality.get("estimated_false_positive_rate", 0.0))
+        rerun_flag = float(analysis_quality.get("rerun_recommended", 0.0)) > 0.5
+        validated_true = int(validation_stats.get("validated_true", 0))
+        validated_false = int(validation_stats.get("validated_false", 0))
+        total_validations = validated_true + validated_false
+        validation_noise = (
+            total_validations >= 2
+            and (validated_false / max(total_validations, 1)) >= 0.40
+        )
+        quality_signal = rerun_flag or fp_rate >= 0.55 or validation_noise
+    else:
+        noise_level = float(analysis_quality.get("noise_level", 0.0))
+        fp_fraction = float(analysis_quality.get("false_positive_fraction", 0.0))
+        rerun_flag = float(analysis_quality.get("rerun_recommended", 0.0)) > 0.5
+        quality_signal = rerun_flag or noise_level >= 0.2 or fp_fraction >= 0.35
+
+    return quality_signal or _rerun_requested_from_context(action)
 
 
 def fallback_action(obs: ExperimentObservation) -> ExperimentAction:
@@ -790,19 +865,40 @@ def main():
                         f"blocked premature meta-action {action.action_type.value}"
                     )
                 elif action.action_type in completed_types:
-                    override_reason = (
-                        f"blocked repeat of completed step {action.action_type.value}"
-                    )
+                    if _should_allow_analysis_rerun(obs, action):
+                        action.parameters = {
+                            **(action.parameters or {}),
+                            "allow_rerun": True,
+                            "rerun_reason": "low_quality_analysis_signal",
+                        }
+                    else:
+                        override_reason = (
+                            f"blocked repeat of completed step {action.action_type.value}"
+                        )
                 elif action.action_type in failed_types:
                     prev_fail_count = sum(
                         1
                         for r in obs.pipeline_history
                         if r.action_type == action.action_type and not r.success
                     )
-                    if prev_fail_count >= 1:
+                    allow_failed_retry = (
+                        action.action_type in {
+                            ActionType.MARKER_SELECTION,
+                            ActionType.PATHWAY_ENRICHMENT,
+                        }
+                        and prev_fail_count <= MAX_ANALYSIS_RERUNS
+                        and _should_allow_analysis_rerun(obs, action)
+                    )
+                    if prev_fail_count >= 1 and not allow_failed_retry:
                         override_reason = (
                             f"blocked re-attempt of failed step {action.action_type.value}"
                         )
+                    elif allow_failed_retry:
+                        action.parameters = {
+                            **(action.parameters or {}),
+                            "allow_rerun": True,
+                            "rerun_reason": "retry_after_failed_low_quality_analysis",
+                        }
 
                 if override_reason:
                     log(f"\n  [!] {override_reason}, using fallback.")

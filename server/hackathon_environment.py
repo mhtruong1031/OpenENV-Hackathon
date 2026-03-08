@@ -189,6 +189,15 @@ class BioExperimentEnvironment(Environment):
             "episode_id": self._state.episode_id,
             "step": self._state.step_count,
             "cumulative_reward": self._cumulative_reward,
+            "analysis_quality": {
+                "marker": dict(self._latent.marker_analysis_quality),
+                "pathway": dict(self._latent.pathway_analysis_quality),
+                "marker_validation": dict(self._latent.marker_validation_stats),
+            },
+            "analysis_runs": {
+                "marker_selection": self._latent.marker_selection_runs,
+                "pathway_enrichment": self._latent.pathway_enrichment_runs,
+            },
         }
         if metadata_extra:
             meta.update(metadata_extra)
@@ -252,3 +261,10 @@ class BioExperimentEnvironment(Environment):
                 if isinstance(p, dict) and p["pathway"] not in existing:
                     self._candidate_mechanisms.append(p["pathway"])
                     existing.add(p["pathway"])
+        if action.action_type == ActionType.VALIDATE_MARKER:
+            marker = str(output.data.get("marker", "")).strip()
+            if marker:
+                valid_key = "validated_true" if bool(output.data.get("validated", False)) else "validated_false"
+                self._latent.marker_validation_stats[valid_key] = (
+                    self._latent.marker_validation_stats.get(valid_key, 0) + 1
+                )

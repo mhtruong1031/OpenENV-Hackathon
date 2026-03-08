@@ -263,3 +263,30 @@ class TransitionEngine:
 
         if action.action_type == ActionType.MARKER_SELECTION:
             s.progress.n_markers_found = output.data.get("n_candidates", 0)
+            s.marker_selection_runs += 1
+            q = output.data.get("quality_metrics", {})
+            if isinstance(q, dict):
+                s.marker_analysis_quality = {
+                    "estimated_true_hits": float(q.get("estimated_true_hits", 0.0)),
+                    "estimated_false_positive_rate": float(
+                        q.get("estimated_false_positive_rate", 1.0)
+                    ),
+                    "noise_level": float(q.get("noise_level", output.uncertainty)),
+                    "rerun_recommended": float(bool(q.get("rerun_recommended", False))),
+                }
+
+        if action.action_type == ActionType.PATHWAY_ENRICHMENT:
+            s.pathway_enrichment_runs += 1
+            q = output.data.get("quality_metrics", {})
+            if isinstance(q, dict):
+                s.pathway_analysis_quality = {
+                    "de_genes_found": float(q.get("de_genes_found", 0.0)),
+                    "noise_level": float(q.get("noise_level", output.uncertainty)),
+                    "false_positive_fraction": float(
+                        q.get("false_positive_fraction", 1.0)
+                    ),
+                    "true_pathway_recall_estimate": float(
+                        q.get("true_pathway_recall_estimate", 0.0)
+                    ),
+                    "rerun_recommended": float(bool(q.get("rerun_recommended", False))),
+                }

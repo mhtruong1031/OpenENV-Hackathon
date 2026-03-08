@@ -6,6 +6,7 @@ Reward components
   r_ordering      — correct ordering of experiment steps
   r_info_gain     — information gain from the step's output
   r_efficiency    — resource efficiency (budget & time normalised)
+  r_time_decay    — slow negative drift as episode time is consumed
   r_novelty       — bonus for non-redundant, non-trivial actions
   r_penalty       — penalties for violations, redundancy, waste
   r_terminal      — terminal quality & calibration against hidden truth
@@ -99,10 +100,12 @@ class RewardComputer:
         efficiency_weight: float = 0.3,
         info_gain_weight: float = 0.4,
         validity_weight: float = 0.3,
+        time_decay_weight: float = 0.04,
     ):
         self.w_eff = efficiency_weight
         self.w_ig = info_gain_weight
         self.w_val = validity_weight
+        self.w_time_decay = time_decay_weight
 
     # ── step reward ─────────────────────────────────────────────────────
 
@@ -146,6 +149,14 @@ class RewardComputer:
             / max(next_state.resources.budget_total, 1)
         )
         rb.efficiency = self.w_eff * max(0.0, 1.0 - 5.0 * budget_frac)
+
+        # slow time-decay penalty: becomes mildly stronger later in an episode
+        time_used_frac = next_state.resources.time_used_days / max(
+            next_state.resources.time_limit_days, 1.0
+        )
+        time_decay_penalty = -self.w_time_decay * max(0.0, min(1.0, time_used_frac))
+        rb.penalty += time_decay_penalty
+        rb.components["time_decay_penalty"] = time_decay_penalty
 
         # novelty: small bonus for non-redundant steps
         if not soft_violations:
@@ -204,6 +215,10 @@ class RewardComputer:
         # over-confidence penalty
         overconf = self._overconfidence_penalty(state, conclusions)
         rb.components["overconfidence_penalty"] = overconf
+        mismatch_stats = self._mismatch_stats(state, conclusions)
+        extra_missing_penalty = self._extra_missing_penalty_from_stats(mismatch_stats)
+        rb.components.update(mismatch_stats)
+        rb.components["extra_missing_penalty"] = extra_missing_penalty
 
         eff_bonus = (budget_eff + time_eff) / 2.0 if completeness >= 0.3 else 0.0
         rb.terminal = (
@@ -211,6 +226,7 @@ class RewardComputer:
             + 4.0 * calibration
             + 1.0 * eff_bonus
             + overconf
+            + extra_missing_penalty
         )
         return rb
 
@@ -416,3 +432,52 @@ class RewardComputer:
                 penalty -= 0.5 * c.confidence
 
         return penalty
+
+    @staticmethod
+    def _mismatch_stats(
+        s: FullLatentState, conclusions: List[ConclusionClaim]
+    ) -> Dict[str, float]:
+        if not conclusions:
+            return {
+                "missing_markers": 0.0,
+                "extra_markers": 0.0,
+                "missing_pathways": 0.0,
+                "extra_pathways": 0.0,
+            }
+
+        pred_markers = {
+            g.strip().upper()
+            for c in conclusions
+            for g in c.top_markers
+            if isinstance(g, str) and g.strip()
+        }
+        true_markers = {g.strip().upper() for g in s.biology.true_markers if g.strip()}
+
+        pred_pathways = {
+            p.strip().lower()
+            for c in conclusions
+            for p in c.predicted_pathways.keys()
+            if isinstance(p, str) and p.strip()
+        }
+        true_pathways = {
+            p.strip().lower() for p in s.biology.true_pathways.keys() if p.strip()
+        }
+
+        return {
+            "missing_markers": float(len(true_markers - pred_markers)),
+            "extra_markers": float(len(pred_markers - true_markers)),
+            "missing_pathways": float(len(true_pathways - pred_pathways)),
+            "extra_pathways": float(len(pred_pathways - true_pathways)),
+        }
+
+    @staticmethod
+    def _extra_missing_penalty_from_stats(stats: Dict[str, float]) -> float:
+        missing_markers = float(stats.get("missing_markers", 0.0))
+        extra_markers = float(stats.get("extra_markers", 0.0))
+        missing_pathways = float(stats.get("missing_pathways", 0.0))
+        extra_pathways = float(stats.get("extra_pathways", 0.0))
+
+        marker_penalty = 0.08 * (missing_markers + extra_markers)
+        pathway_penalty = 0.12 * (missing_pathways + extra_pathways)
+        total_penalty = -(marker_penalty + pathway_penalty)
+        return max(total_penalty, -2.5)
