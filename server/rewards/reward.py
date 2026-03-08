@@ -180,8 +180,12 @@ class RewardComputer:
         state: FullLatentState,
         conclusions: List[ConclusionClaim],
         task_success_criteria: List[str],
+        discovered_markers: Optional[List[str]] = None,
+        candidate_mechanisms: Optional[List[str]] = None,
     ) -> RewardBreakdown:
         rb = RewardBreakdown()
+        discovered_markers = discovered_markers or []
+        candidate_mechanisms = candidate_mechanisms or []
 
         # pipeline completeness (0-1)
         completeness = self._completeness(state)
@@ -205,12 +209,22 @@ class RewardComputer:
         overconf = self._overconfidence_penalty(state, conclusions)
         rb.components["overconfidence_penalty"] = overconf
 
+        discovery_alignment = self._discovery_alignment(
+            state,
+            discovered_markers,
+            candidate_mechanisms,
+        )
+        discovery_error_penalty = -2.5 * (1.0 - discovery_alignment)
+        rb.components["discovery_alignment"] = discovery_alignment
+        rb.components["discovery_error_penalty"] = discovery_error_penalty
+
         eff_bonus = (budget_eff + time_eff) / 2.0 if completeness >= 0.3 else 0.0
         rb.terminal = (
             3.0 * completeness
             + 4.0 * calibration
             + 1.0 * eff_bonus
             + overconf
+            + discovery_error_penalty
         )
         return rb
 
@@ -416,3 +430,43 @@ class RewardComputer:
                 penalty -= 0.5 * c.confidence
 
         return penalty
+
+    def _discovery_alignment(
+        self,
+        s: FullLatentState,
+        discovered_markers: List[str],
+        candidate_mechanisms: List[str],
+    ) -> float:
+        """Symmetric end-of-episode similarity for discovered biology.
+
+        Forward scoring measures recall against hidden truth. Reverse scoring
+        measures how well the agent's discoveries map back onto real biology,
+        which penalizes extra hallucinated markers or mechanisms.
+        """
+        components: List[float] = []
+
+        if s.biology.true_markers or discovered_markers:
+            marker_recall = marker_set_score(
+                discovered_markers,
+                s.biology.true_markers,
+            )
+            marker_precision = marker_set_score(
+                s.biology.true_markers,
+                discovered_markers,
+            )
+            components.append((marker_recall + marker_precision) / 2.0)
+
+        if s.biology.causal_mechanisms or candidate_mechanisms:
+            mechanism_recall = mechanism_set_score(
+                candidate_mechanisms,
+                s.biology.causal_mechanisms,
+            )
+            mechanism_precision = mechanism_set_score(
+                s.biology.causal_mechanisms,
+                candidate_mechanisms,
+            )
+            components.append((mechanism_recall + mechanism_precision) / 2.0)
+
+        if not components:
+            return 1.0
+        return sum(components) / len(components)

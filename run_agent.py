@@ -23,6 +23,15 @@ from server.hackathon_environment import BioExperimentEnvironment
 
 DASHBOARD_STATE_PATH = Path(__file__).parent / "_dashboard_state.json"
 DASHBOARD_CMD_PATH = Path(__file__).parent / "_dashboard_cmd.json"
+# #region agent log
+DEBUG_LOG_PATH = Path(__file__).parent / "debug-904eee.log"
+def _debug_log(msg: str, data: dict):
+    try:
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"sessionId":"904eee","message":msg,"data":data,"timestamp":int(time.time()*1000)}) + "\n")
+    except Exception:
+        pass
+# #endregion
 
 USE_PIPELINE = os.getenv("RUN_AGENT_USE_PIPELINE", "0").strip().lower() not in {"0", "false", "off"}
 
@@ -145,6 +154,10 @@ def _repair_truncated_json(text: str) -> Optional[str]:
     if not s.startswith("{"):
         return None
 
+    # Drop dangling partial keys or empty key/value stubs at the tail.
+    s = re.sub(r',\s*"[^"\n]*$', '', s)
+    s = re.sub(r',\s*"[^"\n]*"\s*:\s*$', '', s)
+
     in_string = False
     escape = False
     for ch in s:
@@ -179,7 +192,20 @@ def _repair_truncated_json(text: str) -> Optional[str]:
             return s
     except json.JSONDecodeError:
         pass
+    # #region agent log
+    _debug_log("repair_failed", {"input_tail": text[-120:], "repaired_tail": s[-120:], "hypothesisId": "H1"})
+    # #endregion
     return None
+
+
+def _normalize_jsonish_text(text: str) -> str:
+    """Normalize common near-JSON artifacts emitted by small local models."""
+    text = _strip_js_comments(text)
+    text = re.sub(r'(?<=:\s)\bNone\b', 'null', text)
+    text = re.sub(r'(?<=:\s)\bTrue\b', 'true', text)
+    text = re.sub(r'(?<=:\s)\bFalse\b', 'false', text)
+    text = re.sub(r'"([^"\n]+?):"\s*,', r'"\1": "",', text)
+    return text
 
 
 def _strip_js_comments(text: str) -> str:
@@ -190,7 +216,7 @@ def _strip_js_comments(text: str) -> str:
 
 
 def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
-    stripped = _strip_js_comments(text).strip()
+    stripped = _normalize_jsonish_text(text).strip()
     fence_prefix = "```"
     if stripped.startswith(fence_prefix) and stripped.endswith(fence_prefix):
         lines = stripped.splitlines()
@@ -212,6 +238,7 @@ def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
                     break
         start = stripped.find("{", start + 1)
 
+    repaired = None
     first_brace = stripped.find("{")
     if first_brace != -1:
         repaired = _repair_truncated_json(stripped[first_brace:])
@@ -220,14 +247,25 @@ def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
 
     candidates.sort(key=len, reverse=True)
 
+    last_err = None
     for candidate in candidates:
         try:
             parsed = json.loads(candidate)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            last_err = str(e)
             continue
         if isinstance(parsed, dict):
             return parsed
 
+    # #region agent log
+    _debug_log("extract_failed", {
+        "normalized_tail": stripped[-150:] if len(stripped) > 150 else stripped,
+        "repair_returned": repaired is not None,
+        "last_json_err": last_err,
+        "has_python_none": "None" in stripped,
+        "hypothesisId": "H4",
+    })
+    # #endregion
     return None
 
 
@@ -350,8 +388,11 @@ def parse_action(text: str) -> Optional[ExperimentAction]:
     d = extract_json_object(text)
     if d is not None:
         action_type = normalize_action_type(get_payload_value(d, "action_type"))
+        # #region agent log
         if action_type is None:
+            _debug_log("parse_extract_bad_action_type", {"raw": get_payload_value(d, "action_type"), "hypothesisId": "H4"})
             return None
+        # #endregion
 
         parameters = get_payload_value(d, "parameters", "params") or {}
         if not isinstance(parameters, dict):
@@ -366,7 +407,7 @@ def parse_action(text: str) -> Optional[ExperimentAction]:
             confidence = 0.5
 
         justification = get_payload_value(
-            d, "justification", "reasoning", "rationale"
+            d, "justification", "reasoning", "rationale", "reason"
         )
         if justification is not None and not isinstance(justification, str):
             justification = compact_preview(justification, 200)
@@ -385,15 +426,21 @@ def parse_action(text: str) -> Optional[ExperimentAction]:
         text,
         re.IGNORECASE,
     )
+    # #region agent log
     if not action_match:
+        _debug_log("parse_regex_no_action", {"text_preview": text[:200], "hypothesisId": "H3"})
         return None
+    # #endregion
 
     action_type = normalize_action_type(action_match.group(1))
+    # #region agent log
     if action_type is None:
+        _debug_log("parse_regex_bad_action_type", {"raw": action_match.group(1), "hypothesisId": "H3"})
         return None
+    # #endregion
 
     method_match = re.search(
-        r'["\']method["\']\s*:\s*("((?:[^"\\]|\\.)*)"|null|true|false|-?\d+(?:\.\d+)?)',
+        r'["\']method["\']\s*:\s*("((?:[^"\\]|\\.)*)"|null|none|true|false|-?\d+(?:\.\d+)?)',
         text,
         re.IGNORECASE,
     )
@@ -403,7 +450,7 @@ def parse_action(text: str) -> Optional[ExperimentAction]:
         re.IGNORECASE,
     )
     justification_match = re.search(
-        r'["\'](?:justif\w*|reasoning|rationale)["\']\s*:\s*"((?:[^"\\]|\\.)*)',
+        r'["\'](?:justif\w*|reasoning|rationale|reason)["\']\s*:\s*"((?:[^"\\]|\\.)*)',
         text,
         re.DOTALL | re.IGNORECASE,
     )
@@ -430,7 +477,7 @@ def parse_action(text: str) -> Optional[ExperimentAction]:
                 method = json.loads(raw_method)
             except json.JSONDecodeError:
                 method = raw_method.strip('"')
-        elif raw_method.lower() not in {"null", "true", "false"}:
+        elif raw_method.lower() not in {"null", "none", "true", "false"}:
             method = raw_method
     method = normalize_optional_string(method)
 
@@ -440,6 +487,21 @@ def parse_action(text: str) -> Optional[ExperimentAction]:
         parameters={},
         justification=justification,
         confidence=min(1.0, max(0.0, confidence)),
+    )
+
+
+def should_force_terminal_conclusion(
+    action: ExperimentAction,
+    completed_types: set[ActionType],
+) -> bool:
+    meta_repeatables = {
+        ActionType.DESIGN_FOLLOWUP,
+        ActionType.REQUEST_SUBAGENT_REVIEW,
+    }
+    return (
+        action.action_type in meta_repeatables
+        and action.action_type in completed_types
+        and ActionType.SYNTHESIZE_CONCLUSION not in completed_types
     )
 
 
@@ -811,6 +873,21 @@ def main():
                 for r in obs.pipeline_history
                 if not r.success
             }
+
+            if should_force_terminal_conclusion(action, completed_types):
+                log(
+                    f"\n  [!] repeated completed meta step {action.action_type.value} "
+                    f"— forcing synthesize_conclusion."
+                )
+                action = ExperimentAction(
+                    action_type=ActionType.SYNTHESIZE_CONCLUSION,
+                    justification="repeated completed meta step forced terminal conclusion",
+                    confidence=action.confidence,
+                )
+                completed_types = {
+                    r.action_type for r in obs.pipeline_history if r.success
+                }
+
             skip_reason = None
             if action.action_type in completed_types:
                 skip_reason = (

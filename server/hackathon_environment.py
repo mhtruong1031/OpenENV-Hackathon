@@ -143,7 +143,11 @@ class BioExperimentEnvironment(Environment):
         terminal_rb = RewardBreakdown()
         if done:
             terminal_rb = self._rewards.terminal_reward(
-                self._latent, self._conclusions, self._task.success_criteria,
+                self._latent,
+                self._conclusions,
+                self._task.success_criteria,
+                discovered_markers=self._discovered_markers,
+                candidate_mechanisms=self._candidate_mechanisms,
             )
 
         total_reward = step_rb.total + terminal_rb.total

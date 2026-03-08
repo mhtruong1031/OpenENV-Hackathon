@@ -92,7 +92,7 @@ def get_payload_value(payload: Dict[str, Any], *names: str) -> Any:
     return None
 
 
-def parse_args() -> argparse.Namespace:
+def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Train a GRPO policy against the OpenEnv bio experiment environment."
     )
@@ -164,7 +164,22 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="HuggingFace Hub repo id to push the trained model to (e.g. 'myuser/my-model').",
     )
-    return parser.parse_args()
+    return parser
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    return build_argument_parser().parse_args(argv)
+
+
+def make_training_args(**overrides: Any) -> argparse.Namespace:
+    """Build an argparse-style namespace for notebooks and scripts."""
+    parser = build_argument_parser()
+    defaults = vars(parser.parse_args([]))
+    unknown = sorted(set(overrides) - set(defaults))
+    if unknown:
+        raise ValueError(f"Unknown training args: {', '.join(unknown)}")
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
 
 
 def format_observation(obs: ExperimentObservation) -> str:
@@ -418,6 +433,9 @@ def _repair_truncated_json(text: str) -> Optional[str]:
     if not s.startswith("{"):
         return None
 
+    s = re.sub(r',\s*"[^"\n]*$', '', s)
+    s = re.sub(r',\s*"[^"\n]*"\s*:\s*$', '', s)
+
     in_string = False
     escape = False
     for ch in s:
@@ -455,6 +473,16 @@ def _repair_truncated_json(text: str) -> Optional[str]:
     return None
 
 
+def _normalize_jsonish_text(text: str) -> str:
+    """Normalize common near-JSON artifacts emitted by small local models."""
+    text = _strip_js_comments(text)
+    text = re.sub(r'(?<=:\s)\bNone\b', 'null', text)
+    text = re.sub(r'(?<=:\s)\bTrue\b', 'true', text)
+    text = re.sub(r'(?<=:\s)\bFalse\b', 'false', text)
+    text = re.sub(r'"([^"\n]+?):"\s*,', r'"\1": "",', text)
+    return text
+
+
 def _strip_js_comments(text: str) -> str:
     """Remove // and /* */ comments that small LLMs inject into JSON."""
     text = re.sub(r'//[^\n]*', '', text)
@@ -463,7 +491,7 @@ def _strip_js_comments(text: str) -> str:
 
 
 def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
-    stripped = _strip_js_comments(text).strip()
+    stripped = _normalize_jsonish_text(text).strip()
     fence_prefix = "```"
     if stripped.startswith(fence_prefix) and stripped.endswith(fence_prefix):
         lines = stripped.splitlines()
@@ -504,37 +532,107 @@ def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def normalize_optional_string(value: Any) -> Optional[str]:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    if isinstance(value, (int, float)):
+        return str(value)
+    return compact_preview(value, 80)
+
+
 def parse_action_completion(text: str) -> Optional[ExperimentAction]:
     payload = extract_json_object(text)
-    if payload is None:
+    if payload is not None:
+        action_type = get_payload_value(payload, "action_type")
+        if action_type not in VALID_ACTION_TYPES:
+            return None
+
+        parameters = get_payload_value(payload, "parameters", "params") or {}
+        if not isinstance(parameters, dict):
+            parameters = {}
+
+        confidence = get_payload_value(payload, "confidence")
+        if confidence is None:
+            confidence = 0.5
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            confidence = 0.5
+
+        justification = get_payload_value(
+            payload, "justification", "reasoning", "rationale", "reason"
+        )
+        if justification is not None and not isinstance(justification, str):
+            justification = compact_preview(justification, 200)
+
+        return ExperimentAction(
+            action_type=ActionType(action_type),
+            method=normalize_optional_string(get_payload_value(payload, "method")),
+            parameters=parameters,
+            justification=justification,
+            confidence=min(1.0, max(0.0, confidence)),
+        )
+
+    action_match = re.search(
+        r'["\']action_type["\']\s*:\s*["\']([^"\']+)',
+        text,
+        re.IGNORECASE,
+    )
+    if not action_match:
         return None
 
-    action_type = get_payload_value(payload, "action_type")
+    action_type = action_match.group(1).strip()
     if action_type not in VALID_ACTION_TYPES:
         return None
 
-    parameters = get_payload_value(payload, "parameters", "params") or {}
-    if not isinstance(parameters, dict):
-        parameters = {}
-
-    confidence = get_payload_value(payload, "confidence")
-    if confidence is None:
-        confidence = 0.5
-    try:
-        confidence = float(confidence)
-    except (TypeError, ValueError):
-        confidence = 0.5
-
-    justification = get_payload_value(
-        payload, "justification", "reasoning", "rationale"
+    method_match = re.search(
+        r'["\']method["\']\s*:\s*("((?:[^"\\]|\\.)*)"|null|none|true|false|-?\d+(?:\.\d+)?)',
+        text,
+        re.IGNORECASE,
     )
-    if justification is not None and not isinstance(justification, str):
-        justification = compact_preview(justification, 200)
+    confidence_match = re.search(
+        r'["\']confidence["\']\s*:\s*([0-9]*\.?[0-9]+)',
+        text,
+        re.IGNORECASE,
+    )
+    justification_match = re.search(
+        r'["\'](?:justif\w*|reasoning|rationale|reason)["\']\s*:\s*"((?:[^"\\]|\\.)*)',
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
+
+    confidence = 0.5
+    if confidence_match:
+        try:
+            confidence = float(confidence_match.group(1))
+        except ValueError:
+            confidence = 0.5
+
+    justification = None
+    if justification_match:
+        try:
+            justification = json.loads(f'"{justification_match.group(1)}"')
+        except json.JSONDecodeError:
+            justification = justification_match.group(1)
+
+    method = None
+    if method_match:
+        raw_method = method_match.group(1)
+        if raw_method.startswith('"') and raw_method.endswith('"'):
+            try:
+                method = json.loads(raw_method)
+            except json.JSONDecodeError:
+                method = raw_method.strip('"')
+        elif raw_method.lower() not in {"null", "none", "true", "false"}:
+            method = raw_method
 
     return ExperimentAction(
         action_type=ActionType(action_type),
-        method=get_payload_value(payload, "method"),
-        parameters=parameters,
+        method=normalize_optional_string(method),
+        parameters={},
         justification=justification,
         confidence=min(1.0, max(0.0, confidence)),
     )
@@ -978,8 +1076,52 @@ def load_model_artifacts(
     return tokenizer, model
 
 
-def main() -> None:
-    args = parse_args()
+def generate_action_with_model(
+    model: Any,
+    tokenizer: Any,
+    prompt_or_observation: str | ExperimentObservation,
+    *,
+    max_new_tokens: int = 220,
+    temperature: float = 0.2,
+    top_p: float = 0.9,
+    do_sample: bool = True,
+) -> Dict[str, Any]:
+    import torch
+
+    if isinstance(prompt_or_observation, ExperimentObservation):
+        prompt = build_training_prompt(prompt_or_observation)
+    else:
+        prompt = str(prompt_or_observation)
+
+    model_device = getattr(model, "device", None)
+    if model_device is None:
+        model_device = resolve_torch_runtime()["device"]
+
+    inputs = tokenizer(prompt, return_tensors="pt")
+    inputs = {key: value.to(model_device) for key, value in inputs.items()}
+    prompt_tokens = inputs["input_ids"].shape[1]
+
+    generation_kwargs = {
+        "max_new_tokens": max_new_tokens,
+        "do_sample": do_sample,
+        "temperature": temperature,
+        "top_p": top_p,
+        "pad_token_id": tokenizer.pad_token_id,
+    }
+    with torch.no_grad():
+        output_ids = model.generate(**inputs, **generation_kwargs)
+
+    new_tokens = output_ids[0][prompt_tokens:]
+    response_text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+    action = parse_action_completion(response_text)
+    return {
+        "prompt": prompt,
+        "response_text": response_text,
+        "action": action,
+    }
+
+
+def run_training(args: argparse.Namespace) -> Dict[str, Any]:
     random.seed(args.seed)
     runtime = resolve_torch_runtime()
 
@@ -993,7 +1135,12 @@ def main() -> None:
         print(f"Tokenizer vocab size: {len(tokenizer)}")
         print(f"Model device: {device}")
         print(f"Runtime device name: {runtime['device_name']}")
-        return
+        return {
+            "args": args,
+            "runtime": runtime,
+            "tokenizer": tokenizer,
+            "model": model,
+        }
 
     scenario_names = selected_scenarios(args.scenario_name)
     examples = build_prompt_examples(
@@ -1012,7 +1159,13 @@ def main() -> None:
 
     if args.dry_run:
         run_dry_run_preview(examples, reward_fn, args.output_dir)
-        return
+        return {
+            "args": args,
+            "runtime": runtime,
+            "scenario_names": scenario_names,
+            "examples": examples,
+            "reward_fn": reward_fn,
+        }
 
     from datasets import Dataset
     from trl import GRPOConfig, GRPOTrainer
@@ -1074,6 +1227,23 @@ def main() -> None:
     print("Saved training plots:")
     for plot_name, plot_path in plot_paths.items():
         print(f"  - {plot_name}: {plot_path}")
+
+    return {
+        "args": args,
+        "runtime": runtime,
+        "scenario_names": scenario_names,
+        "examples": examples,
+        "reward_fn": reward_fn,
+        "train_dataset": train_dataset,
+        "tokenizer": tokenizer,
+        "model": model,
+        "trainer": trainer,
+        "plot_paths": plot_paths,
+    }
+
+
+def main() -> None:
+    run_training(parse_args())
 
 
 if __name__ == "__main__":
