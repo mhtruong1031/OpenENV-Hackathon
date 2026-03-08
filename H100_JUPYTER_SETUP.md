@@ -4,7 +4,7 @@ This guide walks you through setting up the OpenEnv Bio Experiment environment o
 
 ## Prerequisites
 
-- **Python** ≥ 3.10 (3.10, 3.11, or 3.12 recommended)
+- **Python** 3.10, 3.11, or **3.12** (3.12 recommended for H100; 3.13 is not supported—numba, vllm, and others require &lt;3.13)
 - **uv** – fast Python package manager ([install instructions](#installing-uv))
 - **NVIDIA driver** ≥ 535.104.05 (usually pre-installed on H100 instances)
 - **CUDA** – H100 uses CUDA 12.x; PyTorch wheels bundle the runtime, so a separate CUDA Toolkit is not required
@@ -38,7 +38,7 @@ cd OpenENV-Hackathon
 
 ### 2. Use uv's auto PyTorch backend
 
-uv can detect your GPU and pick the right PyTorch build. For H100 (CUDA 12.x):
+The project uses Python 3.12 (see `.python-version`). uv will create a 3.12 venv. For H100 (CUDA 12.x):
 
 ```bash
 # Install everything: core + training (TRL, transformers, torch, unsloth) + Jupyter
@@ -159,7 +159,7 @@ subprocess.run([
 
 | Component      | Version / Notes                                      |
 |----------------|------------------------------------------------------|
-| Python         | ≥ 3.10                                               |
+| Python         | 3.10–3.12 (3.12 recommended; 3.13 not supported)     |
 | uv             | ≥ 0.5.3 (for PyTorch index support)                  |
 | torch          | ≥ 2.10.0 (cu128 or cu126 for H100)                   |
 | transformers   | ≥ 5.3.0                                              |
@@ -168,6 +168,22 @@ subprocess.run([
 | Jupyter        | Optional, for notebook workflows                     |
 
 ## Troubleshooting
+
+### `RuntimeError: Cannot install on Python version 3.13.x` or numba / setup.py errors
+
+Python 3.13 is not supported (numba, vllm, and other deps require &lt;3.13). Use Python 3.12:
+
+```bash
+# With uv: ensure Python 3.12 is available, then sync
+uv python install 3.12
+uv sync --extra train
+
+# Or create venv explicitly with 3.12
+uv venv --python 3.12
+UV_TORCH_BACKEND=cu128 uv sync --extra train
+```
+
+The project's `.python-version` file pins 3.12; uv will use it when creating the venv.
 
 ### `torch.cuda.is_available()` is False
 
