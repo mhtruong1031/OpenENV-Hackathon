@@ -1813,6 +1813,8 @@ def build_agent_system_prompt() -> str:
     lines = [
         "You are an expert biologist planning a single-cell experiment pipeline.",
         "",
+        "Your final goal is to present discovered markers and causal mechanisms in the conclusion (synthesize_conclusion step).",
+        "",
         "At each turn you see the experiment state and must pick the next scientifically justified step.",
         "",
         "Environment-specific reasoning rules:",
