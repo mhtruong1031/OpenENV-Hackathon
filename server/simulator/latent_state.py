@@ -145,3 +145,9 @@ class FullLatentState(BaseModel):
     task_modality: str = "scRNA-seq"
     step_count: int = 0
     rng_seed: int = 42
+
+    # Transient fields for passing sampled values from the transition engine
+    # to the output generator within a single step (not serialized).
+    last_retain_frac: Optional[float] = Field(None, exclude=True)
+    last_n_clusters: Optional[int] = Field(None, exclude=True)
+    last_perturbation_efficiency: Optional[float] = Field(None, exclude=True)

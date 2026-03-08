@@ -118,7 +118,7 @@ class EvaluationSuite:
         for t in ds.trajectories:
             violations = sum(
                 1 for s in t.steps
-                if not s.observation.get("rule_violations") == []
+                if s.observation.get("rule_violations", []) != []
                 and s.observation.get("rule_violations") is not None
             )
             if violations == 0:
@@ -146,7 +146,8 @@ class EvaluationSuite:
                 at = s.action.get("action_type")
                 if at:
                     all_types.add(at)
-        return len(all_types)
+        from models import ActionType
+        return len(all_types) / max(len(ActionType), 1)
 
     @staticmethod
     def _mean_conclusion_confidence(ds: TrajectoryDataset) -> float:

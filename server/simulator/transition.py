@@ -43,8 +43,8 @@ _BASE_ACTION_COSTS: Dict[ActionType, Tuple[float, float]] = {
     ActionType.REGULATORY_NETWORK_INFERENCE: (  300,  1.0),
     ActionType.MARKER_SELECTION:             (  100,  0.5),
     ActionType.VALIDATE_MARKER:              (5_000, 14.0),
-    ActionType.DESIGN_FOLLOWUP:              (    0,  0.5),
-    ActionType.REQUEST_SUBAGENT_REVIEW:      (    0,  0.25),
+    ActionType.DESIGN_FOLLOWUP:              (  100,  0.5),
+    ActionType.REQUEST_SUBAGENT_REVIEW:      (   50,  0.25),
     ActionType.SYNTHESIZE_CONCLUSION:        (    0,  0.5),
 }
 
@@ -209,7 +209,7 @@ class TransitionEngine:
 
         if at == ActionType.SEQUENCE_CELLS:
             s.resources.sequencing_lanes_used += 1
-            p.n_cells_sequenced = int(
+            p.n_cells_sequenced = self.noise.sample_count(
                 s.biology.n_true_cells * s.technical.capture_efficiency
             )
 
@@ -220,10 +220,12 @@ class TransitionEngine:
             retain = self.noise.sample_qc_metric(0.85, 0.05, 0.5, 1.0)
             base = p.n_cells_sequenced or s.biology.n_true_cells
             p.n_cells_after_filter = max(100, int(base * retain))
+            s.last_retain_frac = retain
 
         if at == ActionType.CLUSTER_CELLS:
             n_true = len(s.biology.cell_populations) or 5
             p.n_clusters_found = self.noise.sample_cluster_count(n_true, 0.8)
+            s.last_n_clusters = p.n_clusters_found
 
     def _apply_perturbation_effects(
         self, s: FullLatentState, action: ExperimentAction
@@ -240,6 +242,7 @@ class TransitionEngine:
             efficiency = self.noise.sample_qc_metric(0.80, 0.12, 0.0, 1.0)
         else:
             efficiency = self.noise.sample_qc_metric(0.70, 0.15, 0.0, 1.0)
+        s.last_perturbation_efficiency = efficiency
         for gene_map in s.biology.true_de_genes.values():
             for gene, delta in effects.items():
                 gene_map[gene] = gene_map.get(gene, 0.0) + delta * efficiency
@@ -253,6 +256,7 @@ class TransitionEngine:
         if action.action_type == ActionType.DIFFERENTIAL_EXPRESSION:
             top = output.data.get("top_genes", [])
             s.discovered_de_genes = [g["gene"] for g in top[:20]]
+            s.progress.n_de_genes_found = output.data.get("n_significant", 0)
 
         if action.action_type == ActionType.CLUSTER_CELLS:
             s.discovered_clusters = output.data.get("cluster_names", [])

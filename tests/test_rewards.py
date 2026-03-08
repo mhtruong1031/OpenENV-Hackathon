@@ -61,6 +61,29 @@ class TestStepReward:
         )
         assert rb.total < 0
 
+    def test_premature_meta_action_gets_penalized(self):
+        rc = RewardComputer()
+        prev, nxt = _states(
+            prev_flags={"data_normalized": True},
+            next_flags={"followup_designed": True},
+            budget_used=2_000,
+        )
+        output = IntermediateOutput(
+            output_type=OutputType.FOLLOWUP_DESIGN,
+            step_index=2,
+            quality_score=1.0,
+            uncertainty=0.0,
+        )
+        rb = rc.step_reward(
+            ExperimentAction(action_type=ActionType.DESIGN_FOLLOWUP),
+            prev,
+            nxt,
+            output,
+            [],
+            [],
+        )
+        assert rb.components.get("premature_meta_action_penalty", 0.0) < 0.0
+
 
 class TestTerminalReward:
     def test_correct_conclusion_rewarded(self):

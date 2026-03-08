@@ -120,6 +120,9 @@ class RuleEngine:
             ActionType.CULTURE_CELLS: [
                 ("samples_collected", "Cannot culture without samples"),
             ],
+            ActionType.SYNTHESIZE_CONCLUSION: [
+                ("data_normalized", "Cannot synthesize conclusions before data normalization"),
+            ],
         }
 
         for flag, msg in REQUIRES.get(at, []):
@@ -141,22 +144,22 @@ class RuleEngine:
             vs.append(RuleViolation(
                 rule_id="budget_exhausted",
                 severity=Severity.HARD,
-                message="Budget exhausted — no further actions possible",
+                message="Budget exhausted - no further actions possible",
             ))
         if s.resources.time_exhausted:
             vs.append(RuleViolation(
                 rule_id="time_exhausted",
                 severity=Severity.HARD,
-                message="Time limit reached — no further actions possible",
+                message="Time limit reached - no further actions possible",
             ))
 
         remaining = s.resources.budget_remaining
-        from server.simulator.transition import ACTION_COSTS
-        cost, _ = ACTION_COSTS.get(action.action_type, (0, 0))
+        from server.simulator.transition import compute_action_cost
+        cost, _ = compute_action_cost(action)
         if cost > remaining and remaining > 0:
             vs.append(RuleViolation(
                 rule_id="budget_insufficient",
-                severity=Severity.SOFT,
+                severity=Severity.HARD,
                 message=f"Action costs ${cost:,.0f} but only ${remaining:,.0f} remains",
             ))
         return vs
@@ -177,6 +180,13 @@ class RuleEngine:
             ActionType.RUN_QC: "qc_performed",
             ActionType.FILTER_DATA: "data_filtered",
             ActionType.NORMALIZE_DATA: "data_normalized",
+            ActionType.CLUSTER_CELLS: "cells_clustered",
+            ActionType.DIFFERENTIAL_EXPRESSION: "de_performed",
+            ActionType.TRAJECTORY_ANALYSIS: "trajectories_inferred",
+            ActionType.PATHWAY_ENRICHMENT: "pathways_analyzed",
+            ActionType.REGULATORY_NETWORK_INFERENCE: "networks_inferred",
+            ActionType.MARKER_SELECTION: "markers_discovered",
+            ActionType.VALIDATE_MARKER: "markers_validated",
             ActionType.DESIGN_FOLLOWUP: "followup_designed",
             ActionType.REQUEST_SUBAGENT_REVIEW: "subagent_review_requested",
             ActionType.SYNTHESIZE_CONCLUSION: "conclusion_reached",

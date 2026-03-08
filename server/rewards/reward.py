@@ -15,7 +15,7 @@ Potential-based shaping
 
 The final step reward is:
   R_t = r_validity + r_ordering + r_info_gain + r_efficiency
-        + r_novelty + r_penalty + γ[φ(s_{t+1}) − φ(s_t)]
+        + r_novelty + r_penalty + [φ(s_{t+1}) − φ(s_t)]
 
 The terminal reward adds:
   R_T += r_terminal
@@ -90,20 +90,16 @@ class RewardComputer:
 
     Parameters
     ----------
-    gamma : float
-        Discount factor for potential-based shaping (default 0.99).
     efficiency_weight : float
         Relative importance of resource efficiency.
     """
 
     def __init__(
         self,
-        gamma: float = 0.99,
         efficiency_weight: float = 0.3,
         info_gain_weight: float = 0.4,
         validity_weight: float = 0.3,
     ):
-        self.gamma = gamma
         self.w_eff = efficiency_weight
         self.w_ig = info_gain_weight
         self.w_val = validity_weight
@@ -137,6 +133,12 @@ class RewardComputer:
 
         # information gain proxy: quality × (1 - uncertainty)
         rb.info_gain = self.w_ig * output.quality_score * (1.0 - output.uncertainty)
+        if action.action_type in META_ACTIONS and not (
+            prev_state.progress.de_performed
+            or prev_state.progress.cells_clustered
+        ):
+            # Meta actions before substantive analysis should not dominate reward.
+            rb.info_gain *= 0.2
 
         # efficiency: normalised cost relative to budget
         budget_frac = (
@@ -156,11 +158,18 @@ class RewardComputer:
 
         # penalties
         rb.penalty = -0.15 * len(soft_violations)
+        if action.action_type in META_ACTIONS and not (
+            prev_state.progress.de_performed
+            or prev_state.progress.cells_clustered
+        ):
+            rb.penalty -= 0.25
+            rb.components["premature_meta_action_penalty"] = -0.25
 
-        # potential-based shaping
+        # potential-based shaping (γ=1 so it doesn't depend on the
+        # training algorithm's discount factor)
         phi_prev = self._potential(prev_state)
         phi_next = self._potential(next_state)
-        rb.shaping = self.gamma * phi_next - phi_prev
+        rb.shaping = phi_next - phi_prev
 
         return rb
 
@@ -196,10 +205,11 @@ class RewardComputer:
         overconf = self._overconfidence_penalty(state, conclusions)
         rb.components["overconfidence_penalty"] = overconf
 
+        eff_bonus = (budget_eff + time_eff) / 2.0 if completeness >= 0.3 else 0.0
         rb.terminal = (
             3.0 * completeness
             + 4.0 * calibration
-            + 1.0 * (budget_eff + time_eff) / 2.0
+            + 1.0 * eff_bonus
             + overconf
         )
         return rb
@@ -241,7 +251,13 @@ class RewardComputer:
         return 0.3
 
     def _potential(self, s: FullLatentState) -> float:
-        """Progress potential φ(s) — counts completed milestones."""
+        """Progress potential φ(s) — counts completed milestones.
+
+        Returns 0.0 at terminal states so that the shaping signal
+        telescopes correctly over the episode.
+        """
+        if s.progress.conclusion_reached:
+            return 0.0
         p = s.progress
         milestones = [
             p.samples_collected,

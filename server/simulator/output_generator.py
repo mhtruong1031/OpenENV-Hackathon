@@ -113,7 +113,7 @@ class OutputGenerator:
         """Genetic perturbation (CRISPR/RNAi): high on-target efficiency,
         binary effect, non-trivial off-target risk."""
         target = action.parameters.get("target", "unknown")
-        efficiency = self.noise.sample_qc_metric(0.80, 0.12, 0.0, 1.0)
+        efficiency = s.last_perturbation_efficiency if s.last_perturbation_efficiency is not None else self.noise.sample_qc_metric(0.80, 0.12, 0.0, 1.0)
         off_target_risk = self.noise.sample_qc_metric(0.10, 0.05, 0.0, 0.5)
         return IntermediateOutput(
             output_type=OutputType.PERTURBATION_RESULT,
@@ -139,7 +139,7 @@ class OutputGenerator:
         activity, systemic effects possible."""
         target = action.parameters.get("target", "unknown")
         dose_um = action.parameters.get("dose_uM", 1.0)
-        efficiency = self.noise.sample_qc_metric(0.70, 0.15, 0.0, 1.0)
+        efficiency = s.last_perturbation_efficiency if s.last_perturbation_efficiency is not None else self.noise.sample_qc_metric(0.70, 0.15, 0.0, 1.0)
         on_target_frac = self.noise.sample_qc_metric(0.75, 0.10, 0.0, 1.0)
         return IntermediateOutput(
             output_type=OutputType.PERTURBATION_RESULT,
@@ -164,7 +164,7 @@ class OutputGenerator:
     ) -> IntermediateOutput:
         import math
         depth = s.technical.sequencing_depth_factor
-        n_cells = self.noise.sample_count(
+        n_cells = s.progress.n_cells_sequenced or self.noise.sample_count(
             s.biology.n_true_cells * s.technical.capture_efficiency
         )
         # Gene detection saturates with sequencing depth: follows a
@@ -241,11 +241,9 @@ class OutputGenerator:
     def _filter_data(
         self, action: ExperimentAction, s: FullLatentState, idx: int
     ) -> IntermediateOutput:
-        retain_frac = self.noise.sample_qc_metric(0.85, 0.05, 0.5, 1.0)
-        # Use the actual sequenced cell count as the pre-filter baseline so
-        # the reported numbers are consistent with the sequencing step output.
+        retain_frac = s.last_retain_frac if s.last_retain_frac is not None else self.noise.sample_qc_metric(0.85, 0.05, 0.5, 1.0)
         n_before = s.progress.n_cells_sequenced or s.biology.n_true_cells
-        n_after = max(100, int(n_before * retain_frac))
+        n_after = s.progress.n_cells_after_filter or max(100, int(n_before * retain_frac))
         return IntermediateOutput(
             output_type=OutputType.COUNT_MATRIX_SUMMARY,
             step_index=idx,
@@ -295,7 +293,7 @@ class OutputGenerator:
     ) -> IntermediateOutput:
         n_true = len(s.biology.cell_populations) or 5
         quality = self.noise.quality_degradation(0.8, [0.95])
-        n_clusters = self.noise.sample_cluster_count(n_true, quality)
+        n_clusters = s.last_n_clusters if s.last_n_clusters is not None else self.noise.sample_cluster_count(n_true, quality)
         cluster_names = [f"cluster_{i}" for i in range(n_clusters)]
         n_cells = s.progress.n_cells_after_filter or s.biology.n_true_cells
         sizes = self._partition_by_population(n_cells, n_clusters, s.biology.cell_populations)

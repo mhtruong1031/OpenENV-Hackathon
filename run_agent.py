@@ -12,7 +12,13 @@ from typing import Any, Dict, List, Optional
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
-from models import ActionType, ExperimentAction, ExperimentObservation
+from models import (
+    ActionType,
+    ExperimentAction,
+    ExperimentObservation,
+    build_agent_observation_context,
+    build_agent_system_prompt,
+)
 from server.hackathon_environment import BioExperimentEnvironment
 
 DASHBOARD_STATE_PATH = Path(__file__).parent / "_dashboard_state.json"
@@ -44,34 +50,7 @@ ACTION_TYPE_ALIASES = {
     "final_conclusion": ActionType.SYNTHESIZE_CONCLUSION.value,
 }
 
-SYSTEM_PROMPT = """\
-You are a biologist planning a single-cell experiment. At each step you choose one action to advance the experiment toward answering the research question.
-
-AVAILABLE ACTIONS:
-  collect_sample, select_cohort, culture_cells, prepare_library,
-  sequence_cells, run_qc, filter_data, normalize_data,
-  integrate_batches, cluster_cells, differential_expression,
-  pathway_enrichment, trajectory_analysis, regulatory_network_inference,
-  marker_selection, validate_marker, design_followup_experiment (only after you run initial experiments),
-  request_subagent_review (only after you run initial experiments), synthesize_conclusion (only after you run initial experiments)
-
-AVAILABLE TOOLS (use as "method"):
-  Wet-lab: 10x_chromium, NovaSeq, CellRanger
-  Preprocessing: scanpy.pp.calculate_qc_metrics, scanpy.pp.filter_cells,
-    scanpy.pp.normalize_total, scanpy.pp.neighbors
-  Analysis: scanpy.tl.leiden, scanpy.tl.rank_genes_groups, scanpy.tl.umap,
-    gseapy.prerank, Monocle3, scVelo, SCENIC, Seurat
-  Integration: Harmony, scanorama, BBKNN
-
-CONSTRAINTS:
-- Each step has prerequisites (e.g. you need samples before library prep).
-- Budget and time are limited. Each action has a cost.
-- Do not repeat actions that already succeeded.
-- Synthesize a conclusion only after sufficient analysis.
-
-Reply with ONLY valid JSON (no comments):
-{"action_type": "...", "method": "...", "parameters": {}, "justification": "...", "confidence": 0.8}
-"""
+SYSTEM_PROMPT = build_agent_system_prompt()
 
 
 MODEL_RESPONSE_PREVIEW_CHARS = int(
@@ -97,6 +76,9 @@ def format_observation(obs: ExperimentObservation) -> str:
         f"Conditions: {', '.join(obs.task.conditions) or 'N/A'}",
         f"Step: {obs.step_index} | Budget: ${obs.resource_usage.budget_remaining:,.0f} | Time: {obs.resource_usage.time_remaining_days:.0f}d",
     ]
+    context = build_agent_observation_context(obs, max_tools=5, max_assays=2)
+    if context:
+        parts.append(context)
     if obs.pipeline_history:
         last5 = obs.pipeline_history[-5:]
         parts.append("Recent history:")

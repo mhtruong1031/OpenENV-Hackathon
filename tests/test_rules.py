@@ -97,7 +97,6 @@ class TestMetaActionTiming:
         soft = engine.soft_violations(violations)
         assert any("subagent review" in m.lower() for m in soft)
 
-
 class TestResourceConstraints:
     def test_exhausted_budget_blocked(self):
         s = _state()

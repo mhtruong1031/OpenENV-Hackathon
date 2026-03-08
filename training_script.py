@@ -11,7 +11,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from client import BioExperimentEnv
-from models import ActionType, ExperimentAction, ExperimentObservation
+from models import (
+    ActionType,
+    ExperimentAction,
+    ExperimentObservation,
+    build_agent_observation_context,
+    build_agent_system_prompt,
+)
 from server.hackathon_environment import BioExperimentEnvironment
 from server.tasks.scenarios import SCENARIO_LIBRARY
 
@@ -21,34 +27,7 @@ DEFAULT_BASE_URL = "http://localhost:8000"
 INVALID_ACTION_PENALTY = -2.0
 ENVIRONMENT_ERROR_PENALTY = -4.0
 
-SYSTEM_PROMPT = """\
-You are a biologist planning a single-cell experiment. At each step you choose one action to advance the experiment toward answering the research question.
-
-AVAILABLE ACTIONS:
-  collect_sample, select_cohort, culture_cells, prepare_library,
-  sequence_cells, run_qc, filter_data, normalize_data,
-  integrate_batches, cluster_cells, differential_expression,
-  pathway_enrichment, trajectory_analysis, regulatory_network_inference,
-  marker_selection, validate_marker, design_followup_experiment,
-  request_subagent_review, synthesize_conclusion
-
-AVAILABLE TOOLS (use as "method"):
-  Wet-lab: 10x_chromium, NovaSeq, CellRanger
-  Preprocessing: scanpy.pp.calculate_qc_metrics, scanpy.pp.filter_cells,
-    scanpy.pp.normalize_total, scanpy.pp.neighbors
-  Analysis: scanpy.tl.leiden, scanpy.tl.rank_genes_groups, scanpy.tl.umap,
-    gseapy.prerank, Monocle3, scVelo, SCENIC, Seurat
-  Integration: Harmony, scanorama, BBKNN
-
-CONSTRAINTS:
-- Each step has prerequisites (e.g. you need samples before library prep).
-- Budget and time are limited. Each action has a cost.
-- Do not repeat actions that already succeeded.
-- Synthesize a conclusion only after sufficient analysis.
-
-Reply with ONLY valid JSON (no comments):
-{"action_type": "...", "method": "...", "parameters": {}, "justification": "...", "confidence": 0.8}
-"""
+SYSTEM_PROMPT = build_agent_system_prompt()
 
 HEURISTIC_SEQUENCE = [
     ActionType.COLLECT_SAMPLE,
@@ -198,8 +177,10 @@ def format_observation(obs: ExperimentObservation) -> str:
             f"{obs.step_index} | Budget: ${obs.resource_usage.budget_remaining:,.0f} "
             f"| Time: {obs.resource_usage.time_remaining_days:.0f}d"
         ),
-        f"Available tools: {', '.join(obs.available_tools[:8]) or 'N/A'}",
     ]
+    context = build_agent_observation_context(obs, max_tools=5, max_assays=2)
+    if context:
+        parts.append(context)
     if obs.pipeline_history:
         parts.append("History:")
         for step in obs.pipeline_history[-5:]:
@@ -387,6 +368,7 @@ def build_prompt_examples(
                 "history_actions": json.dumps(
                     [action.model_dump() for action in history_actions]
                 ),
+                "rng_seed": str(env._latent.rng_seed),
                 "reference_action": action_completion_json(next_action),
                 "problem_statement": obs.task.problem_statement,
             })
@@ -605,16 +587,19 @@ class OpenEnvReward:
         completions: List[Any],
         scenario_name: Optional[List[str]] = None,
         history_actions: Optional[List[str]] = None,
+        rng_seed: Optional[List[str]] = None,
         **_: Any,
     ) -> List[float]:
         scenario_names = normalise_column(scenario_name, len(completions))
         history_columns = normalise_column(history_actions, len(completions))
+        seed_columns = normalise_column(rng_seed, len(completions))
         rewards: List[float] = []
 
-        for completion, current_scenario, current_history in zip(
+        for completion, current_scenario, current_history, current_seed in zip(
             completions,
             scenario_names,
             history_columns,
+            seed_columns,
         ):
             action = parse_action_completion(completion_to_text(completion))
             if action is None:
@@ -623,9 +608,9 @@ class OpenEnvReward:
 
             try:
                 if self.reward_backend == "remote":
-                    reward = self._score_remote(action, current_history)
+                    reward = self._score_remote(action, current_scenario, current_history)
                 else:
-                    reward = self._score_local(action, current_scenario, current_history)
+                    reward = self._score_local(action, current_scenario, current_history, current_seed)
             except Exception:
                 reward = self.environment_error_penalty
 
@@ -638,12 +623,14 @@ class OpenEnvReward:
         action: ExperimentAction,
         scenario_name: Optional[str],
         history_actions: Optional[str],
+        rng_seed: Optional[str] = None,
     ) -> float:
         env = BioExperimentEnvironment(
             scenario_name=scenario_name,
             domain_randomise=self.domain_randomise,
         )
-        obs = env.reset()
+        seed = int(rng_seed) if rng_seed else None
+        obs = env.reset(seed=seed)
         for previous_action in decode_history_actions(history_actions):
             obs = env.step(previous_action)
             if obs.done:
@@ -654,9 +641,13 @@ class OpenEnvReward:
     def _score_remote(
         self,
         action: ExperimentAction,
+        scenario_name: Optional[str],
         history_actions: Optional[str],
     ) -> float:
         with BioExperimentEnv(base_url=self.base_url) as env:
+            # NOTE: scenario_name is accepted for API parity with _score_local
+            # but the OpenEnv HTTP protocol does not yet support passing it
+            # through reset(). The server will use its configured default.
             result = env.reset()
             for previous_action in decode_history_actions(history_actions):
                 result = env.step(previous_action)
@@ -978,11 +969,11 @@ def load_model_artifacts(
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         trust_remote_code=trust_remote_code,
-        dtype=runtime["dtype"],
+        torch_dtype=runtime["dtype"],
     )
     if runtime["use_cuda"]:
         model = model.to(runtime["device"])
-    if not runtime["use_cuda"]:
+    else:
         model = model.to("cpu")
     return tokenizer, model
 

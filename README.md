@@ -336,7 +336,7 @@ The environment class supports concurrent sessions, but the bundled server is cu
 
 ### 3. Running a local agent
 
-`run_agent.py` runs a single interactive episode using either an OpenAI API model or a local Hugging Face model:
+`run_agent.py` runs a single interactive episode using a local Hugging Face model:
 
 ```bash
 uv run python run_agent.py
@@ -346,12 +346,16 @@ Configuration is via environment variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `RUN_AGENT_USE_OPENAI` | `1` | Set to `0` to use a local HF model instead |
-| `RUN_AGENT_OPENAI_MODEL` | `gpt-4o-mini` | OpenAI model name |
-| `OPENAI_TIMEOUT_SECONDS` | `60.0` | Request timeout |
-| `OPENAI_MAX_TOKENS` | `220` | Max tokens per response |
+| `RUN_AGENT_USE_PIPELINE` | `0` | Use HF `pipeline()` path instead of direct generate |
+| `RUN_AGENT_MAX_EPISODE_STEPS` | `12` | Maximum number of planning steps |
 
-The local model defaults to `Qwen/Qwen3.5-0.8B` with sampling parameters `temperature=0.7`, `top_p=0.8`, `top_k=20`, `repetition_penalty=1.3`. The episode runs up to `MAX_EPISODE_STEPS = 12` steps. When action parsing fails, the script falls back to a deterministic `FALLBACK_SEQUENCE`.
+The local model defaults to `Qwen/Qwen3.5-0.8B` with sampling parameters `temperature=0.7`, `top_p=0.8`, `top_k=20`, `repetition_penalty=1.3`. The episode runs up to `MAX_EPISODE_STEPS = 12` steps. When action parsing fails, the script falls back to an observation-aware action that respects prerequisites.
+
+PowerShell note: older PowerShell versions do not support `&&`. Run commands from the target directory directly, or use `;` as the command separator.
+
+Windows runtime warnings:
+- If you see HuggingFace symlink-cache warnings, functionality is unaffected; optionally set `HF_HUB_DISABLE_SYMLINKS_WARNING=1`.
+- If you see flash attention / causal-conv fallback warnings, execution continues with a slower PyTorch path.
 
 ### 4. GRPO training
 

@@ -1115,29 +1115,61 @@ class ExperimentAction(Action):
     """
 
     action_type: ActionType = Field(
-        ..., description="Discrete experiment or analysis step type"
+        ...,
+        description=(
+            "Discrete simulator step type. The environment enforces scientific "
+            "prerequisites between steps, so actions should follow a valid "
+            "pipeline order."
+        ),
     )
     input_targets: List[str] = Field(
         default_factory=list,
-        description="References to prior outputs, samples, or artifacts",
+        description=(
+            "Optional references to prior samples, outputs, or artifacts that "
+            "this step consumes."
+        ),
     )
     method: Optional[str] = Field(
-        None, description="Specific method or tool (e.g. 'Seurat', 'CellRanger')"
+        None,
+        description=(
+            "Optional named tool or protocol (for example 'Seurat' or "
+            "'CellRanger'). Prefer methods compatible with the current "
+            "modality and available tool list because tool choice can change "
+            "runtime, cost, and scientific fit."
+        ),
     )
     parameters: Dict[str, Any] = Field(
-        default_factory=dict, description="Method-specific parameters"
+        default_factory=dict,
+        description=(
+            "Action-specific settings such as comparison labels, perturbation "
+            "targets, or analysis options. Use only parameters that materially "
+            "change the scientific step."
+        ),
     )
     expected_output_type: Optional[str] = Field(
-        None, description="What the agent expects this step to produce"
+        None,
+        description=(
+            "Optional expected artifact or summary that should result from the "
+            "step, such as a count matrix, QC report, DE table, or validation "
+            "result."
+        ),
     )
     justification: Optional[str] = Field(
-        None, description="Scientific rationale for this step"
+        None,
+        description=(
+            "Short scientific rationale explaining why this is the right next "
+            "step in the current environment state."
+        ),
     )
     invoked_subagent: Optional[SubagentType] = Field(
         None, description="Sub-agent to delegate to, if any"
     )
     tool_call_spec: Optional[Dict[str, Any]] = Field(
-        None, description="Structured tool invocation specification"
+        None,
+        description=(
+            "Optional structured tool invocation payload when the action needs "
+            "a more explicit tool execution plan."
+        ),
     )
     confidence: float = Field(
         0.5, ge=0.0, le=1.0, description="Agent confidence in this step"
@@ -1237,9 +1269,19 @@ class TaskSpec(BaseModel):
     conditions: List[str] = Field(default_factory=list)
     available_assays: List[str] = Field(
         default_factory=lambda: list(ASSAY_REGISTRY.keys()),
+        description=(
+            "Assays that are scientifically compatible with this task's "
+            "modality. These are the relevant assay choices for the episode, "
+            "not an unrestricted catalog."
+        ),
     )
     available_tools: List[str] = Field(
         default_factory=lambda: list(TOOL_REGISTRY.keys()),
+        description=(
+            "Tools filtered to those compatible with the current task "
+            "modality. The agent should treat this list as the preferred tool "
+            "set for the episode."
+        ),
     )
     budget_limit: float = 100_000.0
     time_limit_days: float = 180.0
@@ -1274,9 +1316,26 @@ class ExperimentObservation(Observation):
     task: TaskSpec = Field(default_factory=TaskSpec)
     step_index: int = 0
     pipeline_history: List[PipelineStepRecord] = Field(default_factory=list)
-    available_assays: List[str] = Field(default_factory=list)
-    available_tools: List[str] = Field(default_factory=list)
-    resource_usage: ResourceUsage = Field(default_factory=ResourceUsage)
+    available_assays: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Episode-specific assay choices already filtered to the current "
+            "modality and task context."
+        ),
+    )
+    available_tools: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Episode-specific compatible tools. These are the methods the "
+            "agent should prefer instead of inventing incompatible tools."
+        ),
+    )
+    resource_usage: ResourceUsage = Field(
+        default_factory=ResourceUsage,
+        description=(
+            "Running budget, time, and compute usage after previous actions."
+        ),
+    )
     latest_output: Optional[IntermediateOutput] = None
     all_outputs: List[IntermediateOutput] = Field(default_factory=list)
     discovered_markers: List[str] = Field(default_factory=list)
@@ -1286,3 +1345,313 @@ class ExperimentObservation(Observation):
     conclusions: List[ConclusionClaim] = Field(default_factory=list)
     rule_violations: List[str] = Field(default_factory=list)
     step_reward_breakdown: Dict[str, float] = Field(default_factory=dict)
+
+
+AGENT_ACTION_GUIDANCE: Dict[ActionType, str] = {
+    ActionType.COLLECT_SAMPLE: (
+        "Wet-lab entry point. One successful collection usually provides enough "
+        "material to continue unless the output shows poor yield or quality."
+    ),
+    ActionType.SELECT_COHORT: (
+        "Use when subject stratification is part of the scientific question "
+        "before downstream experimental work."
+    ),
+    ActionType.PREPARE_LIBRARY: (
+        "Requires collected samples and converts biological material into "
+        "sequence-ready libraries."
+    ),
+    ActionType.CULTURE_CELLS: (
+        "Requires collected samples and adds substantial time; use only when "
+        "live-cell expansion or later perturbation is needed."
+    ),
+    ActionType.PERTURB_GENE: (
+        "Requires samples. Use for causal tests, not as a default discovery "
+        "step."
+    ),
+    ActionType.PERTURB_COMPOUND: (
+        "Requires samples. Best for mechanistic follow-up or treatment "
+        "response questions."
+    ),
+    ActionType.SEQUENCE_CELLS: (
+        "Requires prepared libraries and produces the raw sequencing-derived "
+        "artifacts used by downstream QC and analysis."
+    ),
+    ActionType.RUN_QC: (
+        "Requires sequencing and returns summarized quality metrics such as "
+        "doublets, mitochondrial fraction, and ambient RNA."
+    ),
+    ActionType.FILTER_DATA: (
+        "Requires QC and removes poor-quality cells, changing downstream cell "
+        "counts and data retention."
+    ),
+    ActionType.NORMALIZE_DATA: (
+        "Requires filtered data and unlocks clustering, differential "
+        "expression, trajectory, and network analyses."
+    ),
+    ActionType.INTEGRATE_BATCHES: (
+        "Requires normalized data. Use when batch effects are likely to "
+        "confound interpretation; it is not always necessary."
+    ),
+    ActionType.CLUSTER_CELLS: (
+        "Requires normalized data and identifies cell populations or states "
+        "for downstream interpretation."
+    ),
+    ActionType.DIFFERENTIAL_EXPRESSION: (
+        "Requires normalized data and is the main route to candidate genes "
+        "for pathway analysis and marker selection."
+    ),
+    ActionType.TRAJECTORY_ANALYSIS: (
+        "Requires normalized data and is most useful when lineage progression "
+        "or pseudotime is central to the task."
+    ),
+    ActionType.PATHWAY_ENRICHMENT: (
+        "Requires differential expression. Results are less reliable without a "
+        "strong DE gene list."
+    ),
+    ActionType.REGULATORY_NETWORK_INFERENCE: (
+        "Requires normalized data and is most helpful once cell states or "
+        "trajectories are already characterized."
+    ),
+    ActionType.MARKER_SELECTION: (
+        "Requires differential expression and turns candidate genes into a "
+        "short list for validation."
+    ),
+    ActionType.VALIDATE_MARKER: (
+        "Requires discovered markers and is an expensive wet-lab confirmation "
+        "step that should follow strong computational evidence."
+    ),
+    ActionType.DESIGN_FOLLOWUP: (
+        "Use to propose targeted next experiments once remaining uncertainty "
+        "is clear."
+    ),
+    ActionType.REQUEST_SUBAGENT_REVIEW: (
+        "Use for critique or planning support, not as a substitute for "
+        "missing experimental evidence."
+    ),
+    ActionType.SYNTHESIZE_CONCLUSION: (
+        "Use once the evidence is sufficient. Do not spend budget on redundant "
+        "steps just because more actions are possible."
+    ),
+}
+
+AGENT_ENVIRONMENT_RULES: List[str] = [
+    (
+        "Each successful action already returns summarized scientific evidence, "
+        "so repeated sampling or repeated analysis is not the default."
+    ),
+    (
+        "Repeat a step only when the task demands it or when prior outputs show "
+        "poor quality, insufficient yield, unresolved batch effects, or another "
+        "clear failure mode."
+    ),
+    (
+        "The available tool and assay lists are already filtered to the current "
+        "task modality, so prefer them over inventing incompatible methods."
+    ),
+    (
+        "Hard scientific prerequisites are enforced by the environment, so "
+        "invalid pipeline orderings will be blocked."
+    ),
+]
+
+_TOOL_CATEGORY_AGENT_NOTES: Dict[ToolCategory, str] = {
+    ToolCategory.ALIGNMENT: (
+        "Best immediately after sequencing to turn FASTQ-like inputs into "
+        "count-style matrices for downstream analysis."
+    ),
+    ToolCategory.PREPROCESSING: (
+        "Useful for general single-cell data handling before specialized "
+        "downstream analyses."
+    ),
+    ToolCategory.NORMALIZATION: (
+        "Applies after filtering to produce normalized matrices for downstream "
+        "modeling."
+    ),
+    ToolCategory.DIMENSIONALITY_REDUCTION: (
+        "Builds latent embeddings that support clustering or trajectory work."
+    ),
+    ToolCategory.CLUSTERING: (
+        "Best once data are normalized and the goal is to resolve cell states "
+        "or populations."
+    ),
+    ToolCategory.DIFFERENTIAL_EXPRESSION: (
+        "Tests contrasts and produces ranked genes for biological "
+        "interpretation."
+    ),
+    ToolCategory.TRAJECTORY: (
+        "Useful when the task asks about developmental progression, state "
+        "transitions, or pseudotime."
+    ),
+    ToolCategory.GENE_REGULATORY_NETWORK: (
+        "Most useful after normalized data and some cell-state structure are "
+        "already established."
+    ),
+    ToolCategory.GENE_SET_ANALYSIS: (
+        "Best after differential expression to interpret gene lists at the "
+        "pathway level."
+    ),
+    ToolCategory.BATCH_CORRECTION: (
+        "Use when batch effects would confound interpretation; unnecessary use "
+        "adds extra steps."
+    ),
+    ToolCategory.MULTIMODAL_INTEGRATION: (
+        "Useful only when combining modalities or batches is part of the "
+        "scientific question."
+    ),
+    ToolCategory.QUALITY_CONTROL: (
+        "Helps identify low-quality cells or technical artifacts before "
+        "filtering."
+    ),
+    ToolCategory.CELL_TYPE_ANNOTATION: (
+        "Best after clustering when assigning biological identities to groups."
+    ),
+    ToolCategory.PERTURBATION_ANALYSIS: (
+        "Use when perturbations were actually applied and the goal is to model "
+        "their transcriptional effects."
+    ),
+    ToolCategory.SPATIAL: (
+        "Only useful when the modality includes spatial coordinates or tissue "
+        "context."
+    ),
+}
+
+
+def _format_currency(value: float) -> str:
+    return f"${value:,.0f}"
+
+
+def _format_runtime_hours(hours: float) -> str:
+    if hours < 1.0:
+        return f"{int(round(hours * 60))}m"
+    if float(hours).is_integer():
+        return f"{int(hours)}h"
+    return f"{hours:.1f}h"
+
+
+def describe_tool_for_agent(tool_name: str) -> str:
+    """Return a compact environment-aware tool description for prompts."""
+    tool = TOOL_REGISTRY.get(tool_name)
+    if tool is None:
+        return tool_name
+
+    parts = [f"{tool.name}: {tool.description}."]
+    if tool.input_types or tool.output_types:
+        inputs = ", ".join(tool.input_types) or "upstream artifacts"
+        outputs = ", ".join(tool.output_types) or "analysis artifacts"
+        parts.append(f"Consumes {inputs}; yields {outputs}.")
+
+    category_note = _TOOL_CATEGORY_AGENT_NOTES.get(tool.category)
+    if category_note:
+        parts.append(category_note)
+
+    resource_bits: List[str] = []
+    if tool.typical_cost_usd > 0:
+        resource_bits.append(_format_currency(tool.typical_cost_usd))
+    if tool.typical_runtime_hours > 0:
+        resource_bits.append(_format_runtime_hours(tool.typical_runtime_hours))
+    if tool.requires_gpu:
+        resource_bits.append("GPU")
+    if resource_bits:
+        parts.append(f"Typical resources: {', '.join(resource_bits)}.")
+
+    return " ".join(parts)
+
+
+def describe_assay_for_agent(assay_name: str) -> str:
+    """Return a compact environment-aware assay description for prompts."""
+    assay = ASSAY_REGISTRY.get(assay_name)
+    if assay is None:
+        return assay_name
+
+    parts = [f"{assay.name}: {assay.description}."]
+    if assay.outputs:
+        parts.append(f"Produces {', '.join(assay.outputs)}.")
+
+    requirements: List[str] = []
+    if assay.requires_live_cells:
+        requirements.append("live cells")
+    if assay.requires_fresh_tissue:
+        requirements.append("fresh tissue")
+    if requirements:
+        parts.append(f"Requires {' and '.join(requirements)}.")
+
+    parts.append(
+        "Typical resources: "
+        f"{_format_currency(assay.typical_cost_usd)}, "
+        f"{assay.typical_duration_days:.1f}d."
+    )
+    return " ".join(parts)
+
+
+def build_agent_system_prompt() -> str:
+    """Build the shared agent system prompt for training and inference."""
+    lines = [
+        "You are an expert biologist planning a single-cell experiment pipeline.",
+        "",
+        "At each turn you see the experiment state and must pick the next scientifically justified step.",
+        "",
+        "Environment-specific reasoning rules:",
+    ]
+    lines.extend(f"  - {rule}" for rule in AGENT_ENVIRONMENT_RULES)
+    lines.append("")
+    lines.append("Action guidance:")
+    lines.extend(
+        f"  - {action_type.value}: {AGENT_ACTION_GUIDANCE[action_type]}"
+        for action_type in ActionType
+    )
+    lines.extend([
+        "",
+        "Respond with ONLY valid JSON, nothing else:",
+        '{"action_type": "...", "method": null, "parameters": {}, "justification": "...", "confidence": 0.8}',
+        "",
+        "For synthesize_conclusion, use structured claims:",
+        '{"action_type": "synthesize_conclusion", "parameters": {"claims": [{"top_markers": ["GENE1", "GENE2"], "causal_mechanisms": ["mechanism description"], "predicted_pathways": {"pathway_name": 0.8}, "confidence": 0.8, "claim_type": "causal", "claim": "optional free text"}]}, "justification": "...", "confidence": 0.8}',
+    ])
+    return "\n".join(lines)
+
+
+def build_agent_observation_context(
+    obs: ExperimentObservation,
+    *,
+    max_tools: int = 6,
+    max_assays: int = 3,
+) -> str:
+    """Summarize modality-specific tool and assay context for the agent."""
+    sections: List[str] = []
+
+    modality_spec = MODALITY_REGISTRY.get(obs.task.modality)
+    if modality_spec is not None:
+        sections.append(
+            "Modality context: "
+            f"{modality_spec.name} measures {modality_spec.measurement} at "
+            f"{modality_spec.resolution} resolution; typical scale "
+            f"{modality_spec.typical_cells}."
+        )
+    else:
+        sections.append(f"Modality context: {obs.task.modality}.")
+
+    tool_names = list(dict.fromkeys(obs.available_tools or obs.task.available_tools))
+    if tool_names:
+        sections.append("Available tools (already filtered to this modality):")
+        for tool_name in tool_names[:max_tools]:
+            sections.append(f"  - {describe_tool_for_agent(tool_name)}")
+        if len(tool_names) > max_tools:
+            remainder = ", ".join(tool_names[max_tools:max_tools + 6])
+            sections.append(
+                "  - Additional compatible tools not shown in full: "
+                f"{remainder}"
+            )
+
+    assay_names = list(dict.fromkeys(obs.available_assays or obs.task.available_assays))
+    if assay_names:
+        sections.append("Available assays:")
+        for assay_name in assay_names[:max_assays]:
+            sections.append(f"  - {describe_assay_for_agent(assay_name)}")
+        if len(assay_names) > max_assays:
+            remainder = ", ".join(assay_names[max_assays:max_assays + 4])
+            sections.append(
+                "  - Additional compatible assays not shown in full: "
+                f"{remainder}"
+            )
+
+    return "\n".join(sections)

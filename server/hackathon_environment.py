@@ -70,8 +70,8 @@ class BioExperimentEnvironment(Environment):
 
     # ── Environment interface ───────────────────────────────────────────
 
-    def reset(self) -> ExperimentObservation:
-        seed = hash(uuid4()) % (2**31)
+    def reset(self, seed: Optional[int] = None) -> ExperimentObservation:
+        seed = seed if seed is not None else hash(uuid4()) % (2**31)
         self._noise.reseed(seed)
         self._state = State(episode_id=str(uuid4()), step_count=0)
 
@@ -158,6 +158,7 @@ class BioExperimentEnvironment(Environment):
             latest_output=result.output,
             rule_violations=hard_v + soft_v,
             reward_breakdown=breakdown,
+            metadata_extra={"reward_breakdown": breakdown},
         )
 
     @property
@@ -179,10 +180,18 @@ class BioExperimentEnvironment(Environment):
         latest_output: Optional[IntermediateOutput] = None,
         rule_violations: Optional[List[str]] = None,
         reward_breakdown: Optional[Dict[str, float]] = None,
+        metadata_extra: Optional[Dict[str, Any]] = None,
     ) -> ExperimentObservation:
         assert self._task is not None
         assert self._latent is not None
         res = self._latent.resources
+        meta: Dict[str, Any] = {
+            "episode_id": self._state.episode_id,
+            "step": self._state.step_count,
+            "cumulative_reward": self._cumulative_reward,
+        }
+        if metadata_extra:
+            meta.update(metadata_extra)
         return ExperimentObservation(
             task=self._task,
             step_index=self._state.step_count,
@@ -205,14 +214,10 @@ class BioExperimentEnvironment(Environment):
             subagent_outputs=list(self._subagent_outputs),
             conclusions=list(self._conclusions),
             rule_violations=rule_violations or [],
-            step_reward_breakdown=reward_breakdown or {},
+            step_reward_breakdown={},
             done=done,
             reward=reward,
-            metadata={
-                "episode_id": self._state.episode_id,
-                "step": self._state.step_count,
-                "cumulative_reward": self._cumulative_reward,
-            },
+            metadata=meta,
         )
 
     def _compute_uncertainty_summary(self) -> Dict[str, float]:
@@ -228,12 +233,22 @@ class BioExperimentEnvironment(Environment):
     ) -> None:
         if action.action_type == ActionType.MARKER_SELECTION:
             markers = output.data.get("markers", [])
-            self._discovered_markers.extend(markers)
+            existing = set(self._discovered_markers)
+            for m in markers:
+                if m not in existing:
+                    self._discovered_markers.append(m)
+                    existing.add(m)
         if action.action_type == ActionType.REGULATORY_NETWORK_INFERENCE:
             regs = output.data.get("top_regulators", [])
-            self._candidate_mechanisms.extend(regs)
+            existing = set(self._candidate_mechanisms)
+            for r in regs:
+                if r not in existing:
+                    self._candidate_mechanisms.append(r)
+                    existing.add(r)
         if action.action_type == ActionType.PATHWAY_ENRICHMENT:
             pathways = output.data.get("top_pathways", [])
-            self._candidate_mechanisms.extend(
-                [p["pathway"] for p in pathways if isinstance(p, dict)]
-            )
+            existing = set(self._candidate_mechanisms)
+            for p in pathways:
+                if isinstance(p, dict) and p["pathway"] not in existing:
+                    self._candidate_mechanisms.append(p["pathway"])
+                    existing.add(p["pathway"])
