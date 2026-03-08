@@ -168,7 +168,7 @@ subprocess.run([
 | Python         | 3.10–3.12 (3.12 recommended; 3.13 not supported)     |
 | uv             | ≥ 0.5.3 (for PyTorch index support)                  |
 | torch          | ≥ 2.10.0 (cu128 or cu126 for H100)                   |
-| transformers   | ≥ 5.3.0                                              |
+| transformers   | 4.56.x (pinned for unsloth; 4.57+ has PreTrainedConfig rename) |
 | trl            | ≥ 0.29.0                                             |
 | accelerate     | ≥ 1.13.0                                             |
 | Jupyter        | Optional, for notebook workflows                     |
@@ -229,6 +229,10 @@ pip install "vllm==0.7.3"
 
 1. Use a **separate environment** with torch 2.6–2.8 + vllm 0.8.2 + unsloth.
 2. Or use the non-Unsloth path (`training_script.py` / `train.ipynb`) which doesn't depend on vLLM.
+
+### `NameError: name 'PreTrainedConfig' is not defined`
+
+Transformers 4.57+ renamed this class; unsloth expects 4.56.x. The project pins `transformers>=4.56.0,<4.57`. Run `uv sync --extra train` to use the correct version.
 
 ### `ImportError: cannot import name 'ConstantLengthDataset' from 'trl.trainer.utils'`
 
