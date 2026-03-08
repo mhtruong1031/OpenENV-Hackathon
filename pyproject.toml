@@ -18,7 +18,7 @@ dependencies = [
     "numpy>=1.24.0",
     "scipy>=1.10.0",
     "pydantic>=2.0.0",
-    "unsloth",
+    "unsloth>=2025.10.14",  # Oct 2025+ for PreTrainedConfig fix with transformers 4.57+
 ]
 
 [project.optional-dependencies]
@@ -39,7 +39,7 @@ train = [
     "matplotlib>=3.10.8",
     "peft>=0.15.0",
     "torch>=2.10.0",
-    "transformers>=4.56.0,<4.57",  # 4.56.x for unsloth (PreTrainedConfig); 4.57+ breaks
+    "transformers>=4.57.0",  # 4.57+ has check_model_inputs; use latest unsloth for PreTrainedConfig fix
     "trl>=0.19.0,<0.20",  # 0.19.x for unsloth_zoo (ConstantLengthDataset); 0.20+ removed it
 ]
 
