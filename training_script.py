@@ -14,7 +14,7 @@ from models import ActionType, ExperimentAction, ExperimentObservation
 from server.hackathon_environment import BioExperimentEnvironment
 from server.tasks.scenarios import SCENARIO_LIBRARY
 
-DEFAULT_MODEL_ID = "Qwen/Qwen2.5-7B-Instruct" # Insert your own
+DEFAULT_MODEL_ID = "Qwen/Qwen3.5-0.8B"
 DEFAULT_OUTPUT_DIR = "training/grpo-output"
 DEFAULT_BASE_URL = "http://localhost:8000"
 INVALID_ACTION_PENALTY = -2.0
@@ -106,6 +106,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional extra metric key from trainer log history to plot.",
     )
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--load-model-only",
+        action="store_true",
+        help="Download and load the selected model and tokenizer, then exit.",
+    )
     parser.add_argument(
         "--trust-remote-code",
         action="store_true",
@@ -784,9 +789,44 @@ def run_dry_run_preview(
     print(sample["prompt"])
 
 
+def load_model_artifacts(
+    model_id: str,
+    *,
+    trust_remote_code: bool,
+):
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    print(f"Loading tokenizer for {model_id} ...")
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id,
+        trust_remote_code=trust_remote_code,
+    )
+    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    print(f"Loading model for {model_id} ...")
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        trust_remote_code=trust_remote_code,
+        torch_dtype="auto",
+    )
+    return tokenizer, model
+
+
 def main() -> None:
     args = parse_args()
     random.seed(args.seed)
+
+    if args.load_model_only:
+        tokenizer, model = load_model_artifacts(
+            args.model_id,
+            trust_remote_code=args.trust_remote_code,
+        )
+        device = getattr(model, "device", "unknown")
+        print(f"Model ready: {args.model_id}")
+        print(f"Tokenizer vocab size: {len(tokenizer)}")
+        print(f"Model device: {device}")
+        return
 
     scenario_names = selected_scenarios(args.scenario_name)
     examples = build_prompt_examples(
@@ -808,21 +848,12 @@ def main() -> None:
         return
 
     from datasets import Dataset
-    from transformers import AutoModelForCausalLM, AutoTokenizer
     from trl import GRPOConfig, GRPOTrainer
 
     train_dataset = Dataset.from_list(examples)
-    tokenizer = AutoTokenizer.from_pretrained(
+    tokenizer, model = load_model_artifacts(
         args.model_id,
         trust_remote_code=args.trust_remote_code,
-    )
-    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_id,
-        trust_remote_code=args.trust_remote_code,
-        torch_dtype="auto",
     )
     config = GRPOConfig(
         output_dir=args.output_dir,

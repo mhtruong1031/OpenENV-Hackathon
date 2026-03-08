@@ -254,7 +254,7 @@ The environment class supports concurrent sessions, but the bundled server is cu
 ```bash
 uv sync --extra train
 uv run python training_script.py --dry-run
-uv run python training_script.py --model-id Qwen/Qwen2.5-7B-Instruct
+uv run python training_script.py --model-id Qwen/Qwen3.5-0.8B
 ```
 
 By default the reward function reconstructs prompt states locally so the prompt and reward stay aligned. You can switch to a live server-backed reward loop with `--reward-backend remote --base-url http://localhost:8000`.
