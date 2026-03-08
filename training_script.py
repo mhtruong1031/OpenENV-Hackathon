@@ -91,7 +91,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable domain randomisation while building prompts and local rewards.",
     )
-    parser.add_argument("--num-generations", type=int, default=4)
+    parser.add_argument("--num-generations", type=int, default=2)
     parser.add_argument("--max-completion-length", type=int, default=220)
     parser.add_argument("--max-prompt-length", type=int, default=768)
     parser.add_argument("--per-device-train-batch-size", type=int, default=2)
@@ -448,6 +448,7 @@ class OpenEnvReward:
         self.invalid_action_penalty = invalid_action_penalty
         self.environment_error_penalty = environment_error_penalty
         self.domain_randomise = domain_randomise
+        self.__name__ = "openenv_reward"
 
     def __call__(
         self,
@@ -887,7 +888,6 @@ def main() -> None:
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_generations=args.num_generations,
-        max_prompt_length=args.max_prompt_length,
         max_completion_length=args.max_completion_length,
         num_train_epochs=args.num_train_epochs,
         logging_steps=args.logging_steps,
