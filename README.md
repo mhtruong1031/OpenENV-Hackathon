@@ -344,6 +344,13 @@ The environment class supports concurrent sessions, but the bundled server is cu
 uv run python run_agent.py
 ```
 
+For H100 and other large-GPU workflows, prefer the quantized Unsloth path:
+
+```bash
+uv sync --extra train
+uv run python run_agent_unsloth.py
+```
+
 Configuration is via environment variables:
 
 | Variable | Default | Description |
@@ -369,6 +376,14 @@ uv run python training_script.py --dry-run
 uv run python training_script.py --model-id Qwen/Qwen3.5-0.8B
 ```
 
+For H100, the preferred entrypoint is `training_unsloth.py`, which uses Unsloth 4-bit loading plus LoRA for faster quantized GRPO training:
+
+```bash
+uv sync --extra train
+uv run python training_unsloth.py --dry-run
+uv run python training_unsloth.py --model-id Qwen/Qwen3.5-4B
+```
+
 Key arguments:
 
 | Argument | Default | Description |
@@ -383,12 +398,14 @@ Key arguments:
 | `--scenario-name` | all | Repeatable; restricts which scenarios are used |
 | `--domain-randomise` | off | Enable domain randomisation |
 | `--num-generations` | `4` | GRPO generations per prompt |
-| `--max-completion-length` | `220` | Max tokens for model completions |
+| `--max-completion-length` | `160` | Max tokens for model completions |
 | `--max-prompt-length` | `768` | Max tokens for prompts |
 | `--learning-rate` | `5e-6` | AdamW learning rate |
 | `--dry-run` | off | Build data and test reward without training |
 
 By default the reward function reconstructs prompt states locally so the prompt and reward stay aligned. Switch to a live server-backed reward loop with `--reward-backend remote --base-url http://localhost:8000`.
+
+`training_unsloth.py` adds H100-oriented options such as `--max-seq-length`, `--disable-4bit`, `--disable-fast-inference`, and LoRA settings (`--lora-r`, `--lora-alpha`, `--lora-dropout`).
 
 After training, the script saves plots to the output directory:
 
@@ -415,7 +432,9 @@ This runs N episodes with a `random` or `heuristic` policy, saves JSON trajector
 - `training/literature_benchmark.py` runs paper-aligned action sequences and compares outcomes against curated expected findings
 - `training/rollout_collection.py` collects direct environment rollouts into trajectory files
 - `training_script.py` trains a GRPO policy with OpenEnv reward calls
+- `training_unsloth.py` trains a quantized GRPO policy with Unsloth on H100-class GPUs
 - `run_agent.py` runs a local language model planner against the environment
+- `run_agent_unsloth.py` runs the planner with Unsloth 4-bit loading for faster inference
 - `training/trajectory.py` stores trajectories for offline RL, imitation learning, replay, and evaluation
 - `training/evaluation.py` computes online, benchmark, expert-review, and fidelity-oriented metrics
 
@@ -490,6 +509,7 @@ That makes it suitable for:
 ├── openenv.yaml                  # OpenEnv platform deployment config
 ├── pyproject.toml                # Package metadata and dependency groups
 ├── run_agent.py                  # Single-episode interactive agent runner
+├── run_agent_unsloth.py          # Quantized Unsloth interactive agent runner
 ├── server/
 │   ├── app.py                    # FastAPI/OpenEnv server entry point
 │   ├── Dockerfile                # Multi-stage Docker build
@@ -514,6 +534,7 @@ That makes it suitable for:
 │   ├── rollout_collection.py     # Direct rollout collection helper
 │   └── trajectory.py             # Trajectory serialization and dataset utilities
 ├── training_script.py            # TRL GRPO training entry point
+├── training_unsloth.py           # Unsloth quantized GRPO training entry point
 └── tests/
     ├── test_environment.py
     ├── test_literature_benchmark.py

@@ -41,7 +41,7 @@ cd OpenENV-Hackathon
 uv can detect your GPU and pick the right PyTorch build. For H100 (CUDA 12.x):
 
 ```bash
-# Install everything: core + training (TRL, transformers, torch) + Jupyter
+# Install everything: core + training (TRL, transformers, torch, unsloth) + Jupyter
 UV_TORCH_BACKEND=cu128 uv sync --extra train
 
 # Add Jupyter kernel support
@@ -119,9 +119,21 @@ For CUDA 12.6 instead of 12.8, use `cu126` in the index URL and source names.
 |-------------------|--------------------------------------------------------------------------|
 | *(default)*       | Core: `openenv-core`, `numpy`, `scipy`, `pydantic`                       |
 | `--extra dev`     | Testing: `pytest`, `pytest-cov`                                          |
-| `--extra train`   | Training: `torch`, `transformers`, `trl`, `accelerate`, `peft`, etc.    |
+| `--extra train`   | Training: `torch`, `transformers`, `trl`, `accelerate`, `peft`, `unsloth`, etc. |
 | `--extra bio`     | Bioinformatics: `scanpy`, `biopython`, `gseapy`                          |
 | `--extra train --extra dev` | Combined for development + training                    |
+
+## Preferred H100 Workflow
+
+On H100, use the quantized Unsloth entrypoints:
+
+```bash
+uv run python training_unsloth.py --dry-run
+uv run python training_unsloth.py --model-id Qwen/Qwen3.5-4B --output-dir training/grpo-unsloth-output
+uv run python run_agent_unsloth.py
+```
+
+The checked-in `inference.ipynb` notebook now uses `training_unsloth.py` helpers with 4-bit loading and fast inference enabled by default.
 
 ## Running Training in a Jupyter Notebook
 
@@ -129,7 +141,7 @@ Example cell:
 
 ```python
 # In a notebook with the OpenEnv Bio (H100) kernel
-!uv run python training_script.py --model-id Qwen/Qwen3.5-0.8B --dry-run
+!uv run python training_unsloth.py --model-id Qwen/Qwen3.5-4B --dry-run
 ```
 
 Or run interactively from Python:
@@ -137,9 +149,9 @@ Or run interactively from Python:
 ```python
 import subprocess
 subprocess.run([
-    "uv", "run", "python", "training_script.py",
-    "--model-id", "Qwen/Qwen3.5-0.8B",
-    "--output-dir", "training/grpo-output",
+    "uv", "run", "python", "training_unsloth.py",
+    "--model-id", "Qwen/Qwen3.5-4B",
+    "--output-dir", "training/grpo-unsloth-output",
 ], check=True)
 ```
 
@@ -179,7 +191,7 @@ export HF_HUB_DISABLE_SYMLINKS_WARNING=1
 
 - Reduce `--num-generations` or `--rollout-steps`.
 - Use a smaller model (e.g., `Qwen/Qwen3.5-0.8B`) for experiments.
-- Enable gradient checkpointing if supported by your training script.
+- Keep `--disable-4bit` off unless you explicitly need wider weights.
 
 ## See Also
 
