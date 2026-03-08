@@ -90,6 +90,7 @@ class ExperimentProgress(BaseModel):
     markers_validated: bool = False
     conclusion_reached: bool = False
 
+    n_cells_sequenced: Optional[int] = None
     n_cells_after_filter: Optional[int] = None
     n_clusters_found: Optional[int] = None
     n_de_genes_found: Optional[int] = None

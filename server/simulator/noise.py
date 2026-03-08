@@ -30,7 +30,11 @@ class NoiseModel:
     ) -> Dict[str, float]:
         noisy: Dict[str, float] = {}
         for gene, value in true_values.items():
-            if self.rng.random() < dropout_rate:
+            # Dropout probability is inversely proportional to expression
+            # magnitude: lowly expressed genes drop out much more readily,
+            # matching the zero-inflation pattern in real scRNA-seq data.
+            p_drop = dropout_rate / (1.0 + abs(value))
+            if self.rng.random() < p_drop:
                 noisy[gene] = 0.0
             else:
                 sigma = noise_level * abs(value) + 0.1
