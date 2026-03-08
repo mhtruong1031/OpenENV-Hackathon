@@ -91,7 +91,13 @@ class OutputGenerator:
         self, action: ExperimentAction, s: FullLatentState, idx: int
     ) -> IntermediateOutput:
         days = action.parameters.get("days", 7)
-        viability = self.noise.sample_qc_metric(0.92, 0.05, 0.5, 1.0)
+        # Viability decays with culture duration: each day adds ~0.5%
+        # cumulative stress, reflecting senescence, media depletion, and
+        # passaging artefacts common in primary cell cultures.
+        decay = 0.005 * days
+        viability = self.noise.sample_qc_metric(
+            max(0.50, 0.95 - decay), 0.05, 0.30, 1.0
+        )
         return IntermediateOutput(
             output_type=OutputType.CULTURE_RESULT,
             step_index=idx,
@@ -101,20 +107,54 @@ class OutputGenerator:
             artifacts_available=["cultured_cells"],
         )
 
-    def _perturb(
+    def _perturb_gene(
         self, action: ExperimentAction, s: FullLatentState, idx: int
     ) -> IntermediateOutput:
+        """Genetic perturbation (CRISPR/RNAi): high on-target efficiency,
+        binary effect, non-trivial off-target risk."""
         target = action.parameters.get("target", "unknown")
-        efficiency = self.noise.sample_qc_metric(0.75, 0.15, 0.0, 1.0)
+        efficiency = self.noise.sample_qc_metric(0.80, 0.12, 0.0, 1.0)
+        off_target_risk = self.noise.sample_qc_metric(0.10, 0.05, 0.0, 0.5)
         return IntermediateOutput(
             output_type=OutputType.PERTURBATION_RESULT,
             step_index=idx,
             quality_score=efficiency,
-            summary=f"Perturbation of {target} (efficiency={efficiency:.2f})",
+            summary=(
+                f"Genetic perturbation of {target} "
+                f"(efficiency={efficiency:.2f}, off-target risk={off_target_risk:.2f})"
+            ),
             data={
                 "target": target,
                 "efficiency": efficiency,
                 "type": action.action_type.value,
+                "off_target_risk": off_target_risk,
+            },
+            artifacts_available=["perturbed_cells"],
+        )
+
+    def _perturb_compound(
+        self, action: ExperimentAction, s: FullLatentState, idx: int
+    ) -> IntermediateOutput:
+        """Small-molecule perturbation: dose-dependent, partial on-target
+        activity, systemic effects possible."""
+        target = action.parameters.get("target", "unknown")
+        dose_um = action.parameters.get("dose_uM", 1.0)
+        efficiency = self.noise.sample_qc_metric(0.70, 0.15, 0.0, 1.0)
+        on_target_frac = self.noise.sample_qc_metric(0.75, 0.10, 0.0, 1.0)
+        return IntermediateOutput(
+            output_type=OutputType.PERTURBATION_RESULT,
+            step_index=idx,
+            quality_score=efficiency * on_target_frac,
+            summary=(
+                f"Compound perturbation targeting {target} at {dose_um} µM "
+                f"(efficiency={efficiency:.2f}, on-target={on_target_frac:.2f})"
+            ),
+            data={
+                "target": target,
+                "efficiency": efficiency,
+                "type": action.action_type.value,
+                "dose_uM": dose_um,
+                "on_target_fraction": on_target_frac,
             },
             artifacts_available=["perturbed_cells"],
         )
@@ -122,11 +162,18 @@ class OutputGenerator:
     def _sequence_cells(
         self, action: ExperimentAction, s: FullLatentState, idx: int
     ) -> IntermediateOutput:
+        import math
         depth = s.technical.sequencing_depth_factor
         n_cells = self.noise.sample_count(
             s.biology.n_true_cells * s.technical.capture_efficiency
         )
-        n_genes = self.noise.sample_count(18_000)
+        # Gene detection saturates with sequencing depth: follows a
+        # 1 - exp(-k) saturation curve, scaled by library complexity.
+        max_genes = 20_000
+        saturation_arg = depth * s.technical.library_complexity * 0.8
+        n_genes = self.noise.sample_count(
+            int(max_genes * (1.0 - math.exp(-saturation_arg)))
+        )
         median_umi = self.noise.sample_count(int(3000 * depth))
         quality = self.noise.quality_degradation(
             s.technical.sample_quality,
@@ -157,7 +204,15 @@ class OutputGenerator:
         doublet_frac = self.noise.sample_qc_metric(
             s.technical.doublet_rate, 0.01, 0.0, 0.2
         )
-        mito_frac = self.noise.sample_qc_metric(0.05, 0.02, 0.0, 0.3)
+        # Mitochondrial fraction reflects cellular stress: activated,
+        # inflammatory, or pro-fibrotic populations have elevated mito
+        # transcription compared to quiescent/resting cells.
+        _stressed_states = {"activated", "stressed", "pro-fibrotic", "inflammatory"}
+        has_stressed_cells = any(
+            p.state in _stressed_states for p in s.biology.cell_populations
+        )
+        mito_mean = 0.10 if has_stressed_cells else 0.05
+        mito_frac = self.noise.sample_qc_metric(mito_mean, 0.02, 0.0, 0.3)
         ambient_frac = self.noise.sample_qc_metric(
             s.technical.ambient_rna_fraction, 0.01, 0.0, 0.2
         )
@@ -187,7 +242,9 @@ class OutputGenerator:
         self, action: ExperimentAction, s: FullLatentState, idx: int
     ) -> IntermediateOutput:
         retain_frac = self.noise.sample_qc_metric(0.85, 0.05, 0.5, 1.0)
-        n_before = s.biology.n_true_cells
+        # Use the actual sequenced cell count as the pre-filter baseline so
+        # the reported numbers are consistent with the sequencing step output.
+        n_before = s.progress.n_cells_sequenced or s.biology.n_true_cells
         n_after = max(100, int(n_before * retain_frac))
         return IntermediateOutput(
             output_type=OutputType.COUNT_MATRIX_SUMMARY,
@@ -240,7 +297,8 @@ class OutputGenerator:
         quality = self.noise.quality_degradation(0.8, [0.95])
         n_clusters = self.noise.sample_cluster_count(n_true, quality)
         cluster_names = [f"cluster_{i}" for i in range(n_clusters)]
-        sizes = self._random_partition(s.biology.n_true_cells, n_clusters)
+        n_cells = s.progress.n_cells_after_filter or s.biology.n_true_cells
+        sizes = self._partition_by_population(n_cells, n_clusters, s.biology.cell_populations)
         return IntermediateOutput(
             output_type=OutputType.CLUSTER_RESULT,
             step_index=idx,
@@ -260,10 +318,22 @@ class OutputGenerator:
         self, action: ExperimentAction, s: FullLatentState, idx: int
     ) -> IntermediateOutput:
         comparison = action.parameters.get("comparison", "disease_vs_healthy")
+        # Fall back to the first available comparison key if the requested one
+        # is absent, rather than silently returning an empty effect dict.
+        if comparison not in s.biology.true_de_genes and s.biology.true_de_genes:
+            comparison = next(iter(s.biology.true_de_genes))
         true_effects = s.biology.true_de_genes.get(comparison, {})
 
         n_cells = s.progress.n_cells_after_filter or s.biology.n_true_cells
-        noise_level = s.technical.dropout_rate + 0.1 * (1.0 - s.technical.sample_quality)
+        batch_noise = (
+            sum(s.technical.batch_effects.values())
+            / max(len(s.technical.batch_effects), 1)
+        )
+        noise_level = (
+            s.technical.dropout_rate
+            + 0.1 * (1.0 - s.technical.sample_quality)
+            + 0.5 * batch_noise
+        )
         observed = self.noise.sample_effect_sizes(true_effects, n_cells, noise_level)
 
         fp_genes = self.noise.generate_false_positives(5000, 0.002 + noise_level * 0.01)
@@ -323,24 +393,38 @@ class OutputGenerator:
         self, action: ExperimentAction, s: FullLatentState, idx: int
     ) -> IntermediateOutput:
         true_pathways = s.biology.true_pathways
-        noise_level = 0.15
+        # Pathway enrichment quality is tightly coupled to the quality of the
+        # preceding DE step: more DE genes found → better gene-set coverage →
+        # lower noise and fewer spurious pathway hits.
+        de_genes_found = s.progress.n_de_genes_found or 0
+        de_was_run = s.progress.de_performed
+        if de_was_run and de_genes_found > 0:
+            # Noise shrinks as the DE gene list grows (more signal in input).
+            noise_level = max(0.05, 0.25 - 0.001 * min(de_genes_found, 200))
+            n_fp_mean = max(1, int(5 - de_genes_found / 50))
+        else:
+            # Without a DE step, enrichment is unreliable.
+            noise_level = 0.40
+            n_fp_mean = 8
+
         observed: Dict[str, float] = {}
         for pw, activity in true_pathways.items():
             observed[pw] = activity + float(self.noise.rng.normal(0, noise_level))
 
-        for i in range(self.noise.sample_count(2)):
+        for i in range(self.noise.sample_count(n_fp_mean)):
             observed[f"FP_PATHWAY_{i}"] = float(self.noise.rng.uniform(0.3, 0.6))
 
         top = sorted(observed.items(), key=lambda kv: kv[1], reverse=True)[:15]
+        base_quality = 0.80 if de_was_run else 0.45
         return IntermediateOutput(
             output_type=OutputType.PATHWAY_RESULT,
             step_index=idx,
-            quality_score=self.noise.quality_degradation(0.8, [0.95]),
+            quality_score=self.noise.quality_degradation(base_quality, [0.95]),
             summary=f"Pathway enrichment: {len(top)} significant pathways",
             data={
                 "method": action.method or "GSEA",
                 "top_pathways": [
-                    {"pathway": p, "score": round(s, 3)} for p, s in top
+                    {"pathway": p, "score": round(sc, 3)} for p, sc in top
                 ],
             },
             uncertainty=noise_level,
@@ -469,14 +553,46 @@ class OutputGenerator:
         sizes[0] += diff
         return sizes
 
+    def _partition_by_population(
+        self,
+        total: int,
+        k: int,
+        populations: list,
+    ) -> List[int]:
+        """Partition cells into k clusters using true population proportions
+        as Dirichlet concentration parameters, so majority cell types produce
+        larger clusters rather than uniformly random sizes."""
+        if k <= 0:
+            return []
+        if populations:
+            # Use true proportions as Dirichlet alpha — larger proportions
+            # concentrate probability mass, yielding realistic size ratios.
+            raw = [max(p.proportion, 1e-3) for p in populations]
+            # Align alpha length to k: repeat/truncate as needed.
+            if len(raw) >= k:
+                alpha = raw[:k]
+            else:
+                alpha = raw + [sum(raw) / len(raw)] * (k - len(raw))
+            # Scale alpha so the total magnitude is proportional to k,
+            # giving reasonable Dirichlet variance.
+            scale = k / max(sum(alpha), 1e-6)
+            alpha = [a * scale for a in alpha]
+        else:
+            alpha = [1.0] * k
+        fracs = self.noise.rng.dirichlet(alpha=alpha)
+        sizes = [max(1, int(total * f)) for f in fracs]
+        diff = total - sum(sizes)
+        sizes[0] += diff
+        return sizes
+
 
 _HANDLERS = {
     ActionType.COLLECT_SAMPLE: OutputGenerator._collect_sample,
     ActionType.SELECT_COHORT: OutputGenerator._select_cohort,
     ActionType.PREPARE_LIBRARY: OutputGenerator._prepare_library,
     ActionType.CULTURE_CELLS: OutputGenerator._culture_cells,
-    ActionType.PERTURB_GENE: OutputGenerator._perturb,
-    ActionType.PERTURB_COMPOUND: OutputGenerator._perturb,
+    ActionType.PERTURB_GENE: OutputGenerator._perturb_gene,
+    ActionType.PERTURB_COMPOUND: OutputGenerator._perturb_compound,
     ActionType.SEQUENCE_CELLS: OutputGenerator._sequence_cells,
     ActionType.RUN_QC: OutputGenerator._run_qc,
     ActionType.FILTER_DATA: OutputGenerator._filter_data,

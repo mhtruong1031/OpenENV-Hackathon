@@ -188,16 +188,40 @@ class TransitionEngine:
 
         if at == ActionType.SEQUENCE_CELLS:
             s.resources.sequencing_lanes_used += 1
+            p.n_cells_sequenced = int(
+                s.biology.n_true_cells * s.technical.capture_efficiency
+            )
+
+        if at in {ActionType.PERTURB_GENE, ActionType.PERTURB_COMPOUND}:
+            self._apply_perturbation_effects(s, action)
 
         if at == ActionType.FILTER_DATA:
             retain = self.noise.sample_qc_metric(0.85, 0.05, 0.5, 1.0)
-            p.n_cells_after_filter = max(
-                100, int(s.biology.n_true_cells * retain)
-            )
+            base = p.n_cells_sequenced or s.biology.n_true_cells
+            p.n_cells_after_filter = max(100, int(base * retain))
 
         if at == ActionType.CLUSTER_CELLS:
             n_true = len(s.biology.cell_populations) or 5
             p.n_clusters_found = self.noise.sample_cluster_count(n_true, 0.8)
+
+    def _apply_perturbation_effects(
+        self, s: FullLatentState, action: ExperimentAction
+    ) -> None:
+        """Fold perturbation-specific gene effects into true_de_genes so
+        downstream DE analysis reflects the perturbed biology."""
+        target = action.parameters.get("target", "")
+        effects = s.biology.perturbation_effects.get(target, {})
+        if not effects:
+            return
+        # Efficiency drawn from the same distribution as the output handler
+        # so latent state and observable output are coherent.
+        if action.action_type == ActionType.PERTURB_GENE:
+            efficiency = self.noise.sample_qc_metric(0.80, 0.12, 0.0, 1.0)
+        else:
+            efficiency = self.noise.sample_qc_metric(0.70, 0.15, 0.0, 1.0)
+        for gene_map in s.biology.true_de_genes.values():
+            for gene, delta in effects.items():
+                gene_map[gene] = gene_map.get(gene, 0.0) + delta * efficiency
 
     def _propagate_artifacts(
         self,
