@@ -3,21 +3,29 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import time
 from typing import Any, Dict, List, Optional
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from openai_oauth_client import run_openai_chat
 
 from models import ActionType, ExperimentAction, ExperimentObservation
 from server.hackathon_environment import BioExperimentEnvironment
+
+if os.getenv("RUN_AGENT_USE_OPENAI", "1").strip().lower() not in {"0", "false", "off"}:
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 MODEL_ID = "Qwen/Qwen3.5-0.8B"
 MAX_EPISODE_STEPS = 12
 PIPELINE_TASK = "image-text-to-text"
 USE_PIPELINE = True
+USE_OPENAI = os.getenv("RUN_AGENT_USE_OPENAI", "1").strip().lower() not in {"0", "false", "off"}
+OPENAI_MODEL = os.getenv("RUN_AGENT_OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_TIMEOUT_SECONDS = float(os.getenv("RUN_AGENT_OPENAI_TIMEOUT_SECONDS", "60"))
+OPENAI_MAX_TOKENS = int(os.getenv("RUN_AGENT_OPENAI_MAX_TOKENS", "220"))
 
 ACTION_TYPES = [a.value for a in ActionType]
 
@@ -140,47 +148,58 @@ def run_with_pipeline(pipe, prompt: str) -> str:
     return ""
 
 
+def run_with_openai(messages: List[Dict[str, str]]) -> str:
+    return run_openai_chat(
+        messages=messages,
+        model=OPENAI_MODEL,
+        max_tokens=OPENAI_MAX_TOKENS,
+        timeout_seconds=OPENAI_TIMEOUT_SECONDS,
+    )
+
+
 def main():
     tokenizer = None
     model = None
     eos_ids: List[int] = []
     active_pipeline = None
+    if USE_OPENAI:
+        log(f"Using OpenAI chat model ({OPENAI_MODEL}) with OAuth token auth.")
+    else:
+        if USE_PIPELINE:
+            log(f"Loading pipeline ({PIPELINE_TASK}) for {MODEL_ID} ...")
+            try:
+                active_pipeline = pipeline(
+                    PIPELINE_TASK,
+                    model=MODEL_ID,
+                    trust_remote_code=True,
+                    torch_dtype=torch.bfloat16,
+                )
+                log("Pipeline loaded.")
+            except Exception as exc:
+                log(f"Pipeline load failed ({exc}), falling back to tokenizer+model.")
 
-    if USE_PIPELINE:
-        log(f"Loading pipeline ({PIPELINE_TASK}) for {MODEL_ID} ...")
-        try:
-            active_pipeline = pipeline(
-                PIPELINE_TASK,
-                model=MODEL_ID,
-                trust_remote_code=True,
-                torch_dtype=torch.bfloat16,
+        if active_pipeline is None:
+            log(f"Loading tokenizer for {MODEL_ID} ...")
+            tokenizer = AutoTokenizer.from_pretrained(
+                MODEL_ID, trust_remote_code=True,
             )
-            log("Pipeline loaded.")
-        except Exception as exc:
-            log(f"Pipeline load failed ({exc}), falling back to tokenizer+model.")
+            log("Tokenizer loaded. Loading model (this downloads ~4 GB on first run) ...")
 
-    if active_pipeline is None:
-        log(f"Loading tokenizer for {MODEL_ID} ...")
-        tokenizer = AutoTokenizer.from_pretrained(
-            MODEL_ID, trust_remote_code=True,
-        )
-        log("Tokenizer loaded. Loading model (this downloads ~4 GB on first run) ...")
+            model = AutoModelForCausalLM.from_pretrained(
+                MODEL_ID,
+                torch_dtype=torch.bfloat16,
+                device_map="auto",
+                trust_remote_code=True,
+            )
+            log(f"Model loaded. Device: {model.device}")
 
-        model = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID,
-            torch_dtype=torch.bfloat16,
-            device_map="auto",
-            trust_remote_code=True,
-        )
-        log(f"Model loaded. Device: {model.device}")
-
-        if tokenizer.eos_token_id is not None:
-            eos_ids.append(tokenizer.eos_token_id)
-        extra = tokenizer.convert_tokens_to_ids(["<|im_end|>", "<|endoftext|>"])
-        for tid in extra:
-            if isinstance(tid, int) and tid not in eos_ids:
-                eos_ids.append(tid)
-        log(f"EOS token ids: {eos_ids}")
+            if tokenizer.eos_token_id is not None:
+                eos_ids.append(tokenizer.eos_token_id)
+            extra = tokenizer.convert_tokens_to_ids(["<|im_end|>", "<|endoftext|>"])
+            for tid in extra:
+                if isinstance(tid, int) and tid not in eos_ids:
+                    eos_ids.append(tid)
+            log(f"EOS token ids: {eos_ids}")
 
     env = BioExperimentEnvironment()
     obs = env.reset()
@@ -220,7 +239,9 @@ def main():
                 )
 
         t0 = time.time()
-        if active_pipeline is not None:
+        if USE_OPENAI:
+            response = run_with_openai(messages)
+        elif active_pipeline is not None:
             response = run_with_pipeline(active_pipeline, prompt)
             if not response:
                 response = format_observation(obs)
