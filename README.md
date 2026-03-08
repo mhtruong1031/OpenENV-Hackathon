@@ -247,10 +247,33 @@ with BioExperimentEnv(base_url="http://localhost:8000") as env:
 
 The environment class supports concurrent sessions, but the bundled server is currently configured with `max_concurrent_envs=1` in `server/app.py`.
 
-### 3. Benchmark and scripted agents
+### 3. GRPO training
+
+`training_script.py` follows the TRL GRPO pattern and uses OpenEnv rewards to score generated action JSON against this environment.
+
+```bash
+uv sync --extra train
+uv run python training_script.py --dry-run
+uv run python training_script.py --model-id Qwen/Qwen2.5-7B-Instruct
+```
+
+By default the reward function reconstructs prompt states locally so the prompt and reward stay aligned. You can switch to a live server-backed reward loop with `--reward-backend remote --base-url http://localhost:8000`.
+
+After training, the script saves plots to the output directory:
+
+- `training_loss.png`
+- `training_reward.png`
+- `training_metric.png`
+- `training_dashboard.png`
+- `training_plot_manifest.json`
+
+Use `--plot-metric-key <logged_key>` if you want to force a specific extra metric on the third chart; otherwise the script auto-selects a useful logged metric such as KL or gradient norm.
+
+### 4. Benchmark and scripted agents
 
 - `training/literature_benchmark.py` runs paper-aligned action sequences and compares outcomes against curated expected findings
-- `training_script.py` collects rollout trajectories by calling `BioExperimentEnvironment` directly
+- `training/rollout_collection.py` collects direct environment rollouts into trajectory files
+- `training_script.py` trains a GRPO policy with OpenEnv reward calls
 - `run_agent.py` runs a local language model planner against the environment
 - `training/trajectory.py` stores trajectories for offline RL, imitation learning, replay, and evaluation
 - `training/evaluation.py` computes online, benchmark, expert-review, and fidelity-oriented metrics
@@ -296,8 +319,9 @@ That makes it suitable for:
 ├── training/
 │   ├── evaluation.py             # Metrics
 │   ├── literature_benchmark.py   # Paper-backed benchmark flow
+│   ├── rollout_collection.py     # Direct rollout collection helper
 │   └── trajectory.py             # Trajectory serialization
-├── training_script.py            # Direct rollout collection script
+├── training_script.py            # TRL GRPO training entrypoint
 └── tests/                        # Unit and integration tests
 ```
 
