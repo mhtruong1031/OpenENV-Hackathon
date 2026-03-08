@@ -230,6 +230,13 @@ pip install "vllm==0.7.3"
 1. Use a **separate environment** with torch 2.6–2.8 + vllm 0.8.2 + unsloth.
 2. Or use the non-Unsloth path (`training_script.py` / `train.ipynb`) which doesn't depend on vLLM.
 
+### `KeyError: 'qwen3_5'` / Qwen3.5 not supported
+
+Qwen3.5 requires transformers 5.x. With transformers 4.57, use **Qwen2.5** instead:
+- `unsloth/Qwen2.5-3B-Instruct-bnb-4bit`
+- `unsloth/Qwen2.5-7B-Instruct-bnb-4bit`
+- `Qwen/Qwen2.5-3B-Instruct`
+
 ### `NameError: name 'PreTrainedConfig' is not defined` / `check_model_inputs` ImportError
 
 Use unsloth≥2025.10.14 (PreTrainedConfig fix) with transformers≥4.57 (check_model_inputs). Run `uv sync --extra train` to get compatible versions.

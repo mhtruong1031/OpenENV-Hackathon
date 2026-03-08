@@ -231,6 +231,7 @@ def build_grpo_config(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
+        max_prompt_length=None,  # Avoid UnslothGRPOTrainer image_token_id crash for text-only models
         num_train_epochs=args.num_train_epochs,
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
@@ -389,6 +390,11 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
         args=args,
         runtime=runtime,
     )
+    # Workaround: UnslothGRPOTrainer expects vision token IDs for max_prompt_length
+    # truncation; text-only models don't have them. Set to None so protected=[].
+    for attr in ("image_token_id", "vision_start_token_id", "vision_end_token_id"):
+        if not hasattr(trainer, attr):
+            setattr(trainer, attr, None)
     trainer.train()
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
