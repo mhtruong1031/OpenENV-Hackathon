@@ -143,7 +143,11 @@ class BioExperimentEnvironment(Environment):
         terminal_rb = RewardBreakdown()
         if done:
             terminal_rb = self._rewards.terminal_reward(
-                self._latent, self._conclusions, self._task.success_criteria,
+                self._latent,
+                self._conclusions,
+                self._task.success_criteria,
+                discovered_markers=self._discovered_markers,
+                candidate_mechanisms=self._candidate_mechanisms,
             )
 
         total_reward = step_rb.total + terminal_rb.total
@@ -223,7 +227,7 @@ class BioExperimentEnvironment(Environment):
             subagent_outputs=list(self._subagent_outputs),
             conclusions=list(self._conclusions),
             rule_violations=rule_violations or [],
-            step_reward_breakdown={},
+            step_reward_breakdown=reward_breakdown or {},
             done=done,
             reward=reward,
             metadata=meta,

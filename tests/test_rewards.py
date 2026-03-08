@@ -126,3 +126,42 @@ class TestTerminalReward:
         ]
         rb = rc.terminal_reward(state, claims, [])
         assert rb.components.get("overconfidence_penalty", 0) < 0
+
+    def test_discovery_error_penalizes_wrong_markers_and_mechanisms(self):
+        rc = RewardComputer()
+        state = FullLatentState(
+            biology=LatentBiologicalState(
+                true_markers=["NPPA", "NPPB"],
+                causal_mechanisms=["TGF-beta-driven fibrosis"],
+            ),
+            progress=ExperimentProgress(
+                samples_collected=True,
+                cells_sequenced=True,
+                qc_performed=True,
+                data_filtered=True,
+                data_normalized=True,
+                de_performed=True,
+                markers_discovered=True,
+                conclusion_reached=True,
+            ),
+            resources=ResourceState(budget_total=100_000, budget_used=40_000),
+        )
+
+        aligned = rc.terminal_reward(
+            state,
+            [],
+            [],
+            discovered_markers=["NPPA", "NPPB"],
+            candidate_mechanisms=["TGF-beta-driven fibrosis"],
+        )
+        misaligned = rc.terminal_reward(
+            state,
+            [],
+            [],
+            discovered_markers=["WRONG1", "WRONG2"],
+            candidate_mechanisms=["unrelated inflammatory process"],
+        )
+
+        assert aligned.components["discovery_alignment"] > misaligned.components["discovery_alignment"]
+        assert aligned.components["discovery_error_penalty"] > misaligned.components["discovery_error_penalty"]
+        assert aligned.terminal > misaligned.terminal

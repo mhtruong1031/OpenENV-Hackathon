@@ -145,6 +145,10 @@ def _repair_truncated_json(text: str) -> Optional[str]:
     if not s.startswith("{"):
         return None
 
+    # Drop dangling partial keys or empty key/value stubs at the tail.
+    s = re.sub(r',\s*"[^"\n]*$', '', s)
+    s = re.sub(r',\s*"[^"\n]*"\s*:\s*$', '', s)
+
     in_string = False
     escape = False
     for ch in s:
@@ -182,6 +186,16 @@ def _repair_truncated_json(text: str) -> Optional[str]:
     return None
 
 
+def _normalize_jsonish_text(text: str) -> str:
+    """Normalize common near-JSON artifacts emitted by small local models."""
+    text = _strip_js_comments(text)
+    text = re.sub(r'(?<=:\s)\bNone\b', 'null', text)
+    text = re.sub(r'(?<=:\s)\bTrue\b', 'true', text)
+    text = re.sub(r'(?<=:\s)\bFalse\b', 'false', text)
+    text = re.sub(r'"([^"\n]+?):"\s*,', r'"\1": "",', text)
+    return text
+
+
 def _strip_js_comments(text: str) -> str:
     """Remove // and /* */ comments that small LLMs inject into JSON."""
     text = re.sub(r'//[^\n]*', '', text)
@@ -190,7 +204,7 @@ def _strip_js_comments(text: str) -> str:
 
 
 def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
-    stripped = _strip_js_comments(text).strip()
+    stripped = _normalize_jsonish_text(text).strip()
     fence_prefix = "```"
     if stripped.startswith(fence_prefix) and stripped.endswith(fence_prefix):
         lines = stripped.splitlines()
@@ -212,6 +226,7 @@ def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
                     break
         start = stripped.find("{", start + 1)
 
+    repaired = None
     first_brace = stripped.find("{")
     if first_brace != -1:
         repaired = _repair_truncated_json(stripped[first_brace:])
@@ -366,7 +381,7 @@ def parse_action(text: str) -> Optional[ExperimentAction]:
             confidence = 0.5
 
         justification = get_payload_value(
-            d, "justification", "reasoning", "rationale"
+            d, "justification", "reasoning", "rationale", "reason"
         )
         if justification is not None and not isinstance(justification, str):
             justification = compact_preview(justification, 200)
@@ -393,7 +408,7 @@ def parse_action(text: str) -> Optional[ExperimentAction]:
         return None
 
     method_match = re.search(
-        r'["\']method["\']\s*:\s*("((?:[^"\\]|\\.)*)"|null|true|false|-?\d+(?:\.\d+)?)',
+        r'["\']method["\']\s*:\s*("((?:[^"\\]|\\.)*)"|null|none|true|false|-?\d+(?:\.\d+)?)',
         text,
         re.IGNORECASE,
     )
@@ -403,7 +418,7 @@ def parse_action(text: str) -> Optional[ExperimentAction]:
         re.IGNORECASE,
     )
     justification_match = re.search(
-        r'["\'](?:justif\w*|reasoning|rationale)["\']\s*:\s*"((?:[^"\\]|\\.)*)',
+        r'["\'](?:justif\w*|reasoning|rationale|reason)["\']\s*:\s*"((?:[^"\\]|\\.)*)',
         text,
         re.DOTALL | re.IGNORECASE,
     )
@@ -430,7 +445,7 @@ def parse_action(text: str) -> Optional[ExperimentAction]:
                 method = json.loads(raw_method)
             except json.JSONDecodeError:
                 method = raw_method.strip('"')
-        elif raw_method.lower() not in {"null", "true", "false"}:
+        elif raw_method.lower() not in {"null", "none", "true", "false"}:
             method = raw_method
     method = normalize_optional_string(method)
 
@@ -441,6 +456,57 @@ def parse_action(text: str) -> Optional[ExperimentAction]:
         justification=justification,
         confidence=min(1.0, max(0.0, confidence)),
     )
+
+
+def should_force_terminal_conclusion(
+    action: ExperimentAction,
+    completed_types: set[ActionType],
+) -> bool:
+    meta_repeatables = {
+        ActionType.DESIGN_FOLLOWUP,
+        ActionType.REQUEST_SUBAGENT_REVIEW,
+    }
+    return (
+        action.action_type in meta_repeatables
+        and action.action_type in completed_types
+        and ActionType.SYNTHESIZE_CONCLUSION not in completed_types
+    )
+
+
+def ensure_conclusion_claims(
+    obs: ExperimentObservation,
+    action: ExperimentAction,
+) -> ExperimentAction:
+    if action.action_type != ActionType.SYNTHESIZE_CONCLUSION:
+        return action
+
+    parameters = dict(action.parameters or {})
+    raw_claims = parameters.get("claims")
+    if isinstance(raw_claims, list) and raw_claims:
+        normalized_claims = [claim for claim in raw_claims if isinstance(claim, dict)]
+        if normalized_claims:
+            parameters["claims"] = normalized_claims
+            if parameters != action.parameters:
+                return action.model_copy(update={"parameters": parameters})
+            return action
+
+    top_markers = list(obs.discovered_markers[:5])
+    causal_mechanisms = list(obs.candidate_mechanisms[:5])
+    claim_type = "causal" if causal_mechanisms else "correlational"
+    conditions = " vs ".join(obs.task.conditions[:2]) if obs.task.conditions else "the task conditions"
+    claim = action.justification or f"Final synthesis for {conditions}."
+
+    parameters["claims"] = [{
+        "top_markers": top_markers,
+        "causal_mechanisms": causal_mechanisms,
+        "predicted_pathways": {},
+        "confidence": action.confidence,
+        "claim_type": claim_type,
+        "claim": claim,
+    }]
+    if not action.justification:
+        action = action.model_copy(update={"justification": claim})
+    return action.model_copy(update={"parameters": parameters})
 
 
 def write_dashboard_state(
@@ -810,6 +876,21 @@ def main():
                 for r in obs.pipeline_history
                 if not r.success
             }
+
+            if should_force_terminal_conclusion(action, completed_types):
+                log(
+                    f"\n  [!] repeated completed meta step {action.action_type.value} "
+                    f"— forcing synthesize_conclusion."
+                )
+                action = ExperimentAction(
+                    action_type=ActionType.SYNTHESIZE_CONCLUSION,
+                    justification="repeated completed meta step forced terminal conclusion",
+                    confidence=action.confidence,
+                )
+                completed_types = {
+                    r.action_type for r in obs.pipeline_history if r.success
+                }
+
             skip_reason = None
             if action.action_type in completed_types:
                 skip_reason = (
@@ -842,6 +923,8 @@ def main():
                     justification="forced terminal conclusion",
                     confidence=action.confidence,
                 )
+
+            action = ensure_conclusion_claims(obs, action)
 
             log(f"\nStep {step + 1}: {action.action_type.value}  ({gen_time:.1f}s)")
             if thinking:
