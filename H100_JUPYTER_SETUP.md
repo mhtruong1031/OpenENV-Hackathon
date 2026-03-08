@@ -44,8 +44,7 @@ The project uses Python 3.12 (see `.python-version`). uv will create a 3.12 venv
 # Install everything: core + training (TRL, transformers, torch, unsloth) + Jupyter
 UV_TORCH_BACKEND=cu128 uv sync --extra train
 
-# Add Jupyter kernel support
-uv add ipykernel jupyter --extra train
+# (ipykernel is included in --extra train)
 ```
 
 If `UV_TORCH_BACKEND=cu128` fails (e.g., cu128 wheels not available yet), try:
@@ -57,12 +56,20 @@ UV_TORCH_BACKEND=cu126 uv sync --extra train
 ### 3. Register the environment as a Jupyter kernel
 
 ```bash
-uv run python -m ipykernel install --user --name openenv-bio --display-name "OpenEnv Bio (H100)"
+uv run python -m ipykernel install --user --name openenv-bio-312 --display-name "OpenEnv Bio (Python 3.12)"
 ```
+
+Or run the helper script (from project root):
+
+```bash
+bash scripts/register_kernel_312.sh
+```
+
+Then select **"OpenEnv Bio (Python 3.12)"** in the notebook kernel picker.
 
 ### 4. Verify CUDA
 
-In a new Jupyter notebook, select the **"OpenEnv Bio (H100)"** kernel and run:
+In a new Jupyter notebook, select the **"OpenEnv Bio (Python 3.12)"** kernel and run:
 
 ```python
 import torch
@@ -108,7 +115,6 @@ Then run:
 
 ```bash
 uv sync --extra train
-uv add ipykernel jupyter --extra train
 ```
 
 For CUDA 12.6 instead of 12.8, use `cu126` in the index URL and source names.
@@ -140,7 +146,7 @@ The checked-in `inference.ipynb` notebook uses `training_unsloth.py` helpers wit
 Example cell:
 
 ```python
-# In a notebook with the OpenEnv Bio (H100) kernel
+# In a notebook with the OpenEnv Bio (Python 3.12) kernel
 !uv run python training_unsloth.py --model-id Qwen/Qwen3.5-4B --dry-run
 ```
 
