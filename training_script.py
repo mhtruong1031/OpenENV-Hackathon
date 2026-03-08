@@ -1295,6 +1295,77 @@ def load_model_artifacts(
     return tokenizer, model
 
 
+def build_openenv_reward(args: argparse.Namespace) -> OpenEnvReward:
+    """Return the OpenEnv-compatible reward callable used by GRPO."""
+    return OpenEnvReward(
+        reward_backend=args.reward_backend,
+        base_url=args.base_url,
+        domain_randomise=args.domain_randomise,
+    )
+
+
+def prepare_prompt_examples(args: argparse.Namespace) -> Dict[str, Any]:
+    """Build the OpenEnv rollout states that seed GRPO prompts."""
+    scenario_names = selected_scenarios(args.scenario_name)
+    examples = build_prompt_examples(
+        dataset_episodes=args.dataset_episodes,
+        rollout_steps=args.rollout_steps,
+        collection_policy=args.collection_policy,
+        scenario_names=scenario_names,
+        seed=args.seed,
+        domain_randomise=args.domain_randomise,
+    )
+    return {
+        "scenario_names": scenario_names,
+        "examples": examples,
+    }
+
+
+def build_grpo_config(
+    args: argparse.Namespace,
+    runtime: Dict[str, Any],
+):
+    from trl import GRPOConfig
+
+    return GRPOConfig(
+        output_dir=args.output_dir,
+        learning_rate=args.learning_rate,
+        per_device_train_batch_size=args.per_device_train_batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        num_generations=args.num_generations,
+        max_completion_length=args.max_completion_length,
+        max_prompt_length=args.max_prompt_length,
+        num_train_epochs=args.num_train_epochs,
+        logging_steps=args.logging_steps,
+        save_steps=args.save_steps,
+        bf16=runtime["bf16"],
+        fp16=runtime["fp16"],
+        report_to="none",
+        remove_unused_columns=False,
+    )
+
+
+def build_grpo_trainer(
+    *,
+    model: Any,
+    tokenizer: Any,
+    reward_func: Any,
+    train_dataset: Any,
+    args: argparse.Namespace,
+    runtime: Dict[str, Any],
+):
+    from trl import GRPOTrainer
+
+    config = build_grpo_config(args, runtime)
+    return GRPOTrainer(
+        model=model,
+        reward_funcs=reward_func,
+        args=config,
+        train_dataset=train_dataset,
+        processing_class=tokenizer,
+    )
+
+
 def generate_action_with_model(
     model: Any,
     tokenizer: Any,
@@ -1363,20 +1434,10 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
             "model": model,
         }
 
-    scenario_names = selected_scenarios(args.scenario_name)
-    examples = build_prompt_examples(
-        dataset_episodes=args.dataset_episodes,
-        rollout_steps=args.rollout_steps,
-        collection_policy=args.collection_policy,
-        scenario_names=scenario_names,
-        seed=args.seed,
-        domain_randomise=args.domain_randomise,
-    )
-    reward_fn = OpenEnvReward(
-        reward_backend=args.reward_backend,
-        base_url=args.base_url,
-        domain_randomise=args.domain_randomise,
-    )
+    prompt_data = prepare_prompt_examples(args)
+    scenario_names = prompt_data["scenario_names"]
+    examples = prompt_data["examples"]
+    reward_fn = build_openenv_reward(args)
 
     if args.dry_run:
         run_dry_run_preview(examples, reward_fn, args.output_dir)
@@ -1389,27 +1450,10 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
         }
 
     from datasets import Dataset
-    from trl import GRPOConfig, GRPOTrainer
-
     train_dataset = Dataset.from_list(examples)
     tokenizer, model = load_model_artifacts(
         args.model_id,
         trust_remote_code=args.trust_remote_code,
-    )
-    config = GRPOConfig(
-        output_dir=args.output_dir,
-        learning_rate=args.learning_rate,
-        per_device_train_batch_size=args.per_device_train_batch_size,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        num_generations=args.num_generations,
-        max_completion_length=args.max_completion_length,
-        num_train_epochs=args.num_train_epochs,
-        logging_steps=args.logging_steps,
-        save_steps=args.save_steps,
-        bf16=runtime["bf16"],
-        fp16=runtime["fp16"],
-        report_to="none",
-        remove_unused_columns=False,
     )
 
     print(
@@ -1417,13 +1461,19 @@ def run_training(args: argparse.Namespace) -> Dict[str, Any]:
         f"name={runtime['device_name']} "
         f"dtype={runtime['dtype']}"
     )
+    print(
+        "OpenEnv reward: "
+        f"backend={args.reward_backend} scenarios={len(scenario_names)} "
+        f"examples={len(examples)}"
+    )
 
-    trainer = GRPOTrainer(
+    trainer = build_grpo_trainer(
         model=model,
-        reward_funcs=reward_fn,
-        args=config,
         train_dataset=train_dataset,
-        processing_class=tokenizer,
+        tokenizer=tokenizer,
+        reward_func=reward_fn,
+        args=args,
+        runtime=runtime,
     )
     trainer.train()
     trainer.save_model(args.output_dir)
